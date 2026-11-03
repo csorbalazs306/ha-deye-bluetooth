@@ -75,6 +75,12 @@ async def test_entities_and_model(hass: HomeAssistant) -> None:
     assert hass.states.get("number.deye_inverter_max_sell_power").attributes["max"] == 5000
 
 
+async def test_first_poll_reads_everything_right_after_a_host_reboot(hass: HomeAssistant) -> None:
+    with patch("custom_components.deye_bluetooth.monotonic", return_value=30.0):
+        await _add(hass)
+    assert hass.states.get("sensor.deye_inverter_serial").state == "1234567890"
+
+
 async def test_two_loggers(hass: HomeAssistant) -> None:
     first = await _add(hass)
     second = await _add(hass, ADDRESS_2, "deye_2", writes=True)

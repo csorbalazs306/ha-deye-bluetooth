@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from math import inf
 from time import monotonic  # not "import time": this package's time.py would replace it
 
 import voluptuous as vol
@@ -92,8 +93,9 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.link = Link()
         self.lock = asyncio.Lock()
         self.blocks: dict[int, tuple[float, list[int]]] = {}  # start -> (monotonic, words)
-        self._fast_at = 0.0
-        self._slow_at = 0.0
+        # never read: monotonic() is the host's uptime, which can be below any interval
+        self._fast_at = -inf
+        self._slow_at = -inf
         self.full_poll = True  # this update read more than the live blocks
         self.failures = 0
         self.last_error = ""
@@ -180,7 +182,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 for i, value in enumerate(values):
                     if current[i] != value:
                         await self._write_verified(address + i, value)
-                self._fast_at = self._slow_at = 0.0  # read everything again on the next poll
+                self._fast_at = self._slow_at = -inf  # read everything again on the next poll
             except LinkError as exc:
                 await self.link.close()
                 raise HomeAssistantError(f"Deye Bluetooth: write to {address} failed: {exc}") from exc
