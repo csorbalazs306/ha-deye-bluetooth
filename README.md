@@ -23,7 +23,7 @@ This is an independent project, not made by or affiliated with Deye.
 
 | | Status |
 |---|---|
-| SUN-15K-SG05LP3-EU-SM2 with logger `DYDA_WiBLE_1.6.2` | **Verified**: reads. Writes implemented and read back, not yet confirmed on hardware |
+| SUN-15K-SG05LP3-EU-SM2 with logger `DYDA_WiBLE_1.6.2` | **Verified**: reads and writes |
 | Other Deye 3-phase LV hybrids | Untested, likely to read correctly |
 | Other Deye models (single-phase, HV) | Untested: registers may differ, a warning is logged |
 

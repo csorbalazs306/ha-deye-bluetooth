@@ -158,6 +158,18 @@ async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) 
     assert result["data"] == {"address": ADDRESS_2, "entity_prefix": "deye_2"}
 
 
+async def test_flow_by_hand_while_a_discovery_of_the_logger_waits(hass: HomeAssistant) -> None:
+    info = MagicMock(address=ADDRESS, service_uuids=["00000922-0000-1000-8000-00805f9b34fb"])
+    info.name = "logger"
+    discovery = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "bluetooth"}, data=info)
+    assert discovery["type"] is FlowResultType.FORM
+    with patch("custom_components.deye_bluetooth.config_flow.async_discovered_service_info", return_value=[info]):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"address": ADDRESS})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert hass.config_entries.flow.async_progress() == []  # the discovery ended with it
+
+
 async def test_flow_without_a_logger_aborts(hass: HomeAssistant) -> None:
     assert await async_setup_component(hass, "homeassistant", {})
     with patch("custom_components.deye_bluetooth.config_flow.async_discovered_service_info", return_value=[]):

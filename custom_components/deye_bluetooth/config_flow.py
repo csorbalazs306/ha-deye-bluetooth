@@ -29,7 +29,8 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             address = user_input[CONF_ADDRESS].upper()
-            await self.async_set_unique_id(address)
+            # not raising: a waiting discovery of this logger must not block adding it by hand
+            await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title=f"Deye logger {self._found.get(address, address)}",
                                            data={CONF_ADDRESS: address, CONF_PREFIX: self._free_prefix()})

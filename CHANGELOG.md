@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Adding a logger by hand no longer aborts while a discovery of the same logger is waiting.
+- Writes confirmed on real hardware (written, read back, restored).
+
 ## 1.0.0
 
 First public release, extracted from a private Home Assistant setup where it has
