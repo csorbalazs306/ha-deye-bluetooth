@@ -16,18 +16,71 @@
     }
   },
   "options": {
+    "error": {
+      "bad_uuid": "A characteristic is not a valid UUID.",
+      "stale_too_short": "A stale limit is shorter than its poll interval: values would go unavailable between polls."
+    },
     "step": {
       "init": {
         "title": "Deye Bluetooth",
-        "data": {
-          "live_interval": "Live interval (s): grid phases and load",
-          "scan_interval": "Poll interval (s): everything else",
-          "allow_writes": "Allow writes (settings, grid-charge switch, write_register)"
-        },
-        "data_description": {
-          "live_interval": "How often the grid phases and the load are read (each change is a recorder row).",
-          "scan_interval": "Battery, PV, inverter, energy counters (default 15 s).",
-          "allow_writes": "Off: read-only. Every write is read back; only changed registers are written."
+        "sections": {
+          "polling": {
+            "name": "Polling",
+            "data": {
+              "live_interval": "Live interval (s)",
+              "scan_interval": "Poll interval (s)",
+              "settings_interval": "Settings interval (s)",
+              "stale_after": "Values go unavailable after (s)",
+              "settings_stale_after": "Settings go unavailable after (s)"
+            },
+            "data_description": {
+              "live_interval": "Grid phases and load. Each change is a recorder row.",
+              "scan_interval": "Battery, PV, inverter, energy counters.",
+              "settings_interval": "Identity and settings registers.",
+              "stale_after": "Older values are unavailable, so nothing acts on them."
+            }
+          },
+          "control": {
+            "name": "Writing to the inverter",
+            "data": {
+              "allow_writes": "Allow writes (settings, grid-charge switch, write_register)",
+              "write_attempts": "Write attempts",
+              "grid_charge_target_soc": "Grid-charge target SoC (%)"
+            },
+            "data_description": {
+              "allow_writes": "Off: read-only. Every write is read back; only changed registers are written.",
+              "grid_charge_target_soc": "How far the grid-charge switch charges the battery."
+            }
+          },
+          "limits": {
+            "name": "Limits",
+            "description": "Rated power comes from the inverter. These it does not report: check your inverter and battery manual.",
+            "data": {
+              "battery_current_max": "Maximum battery current (A)",
+              "zero_export_max": "Maximum zero export power (W)",
+              "power_step": "Power step (W)",
+              "low_soc_min": "Lowest allowed low SoC (%)",
+              "grid_min_voltage": "Grid present above (V)"
+            },
+            "data_description": {
+              "grid_min_voltage": "With the grid relay open, a phase at this voltage still counts as grid present."
+            }
+          },
+          "link": {
+            "name": "Bluetooth link (advanced)",
+            "description": "Leave these alone unless your logger differs. Wrong values stop the connection.",
+            "data": {
+              "modbus_slave": "Modbus address",
+              "max_read": "Registers per read",
+              "reply_timeout": "Reply timeout (s)",
+              "connect_attempts": "Connect attempts",
+              "write_characteristic": "Write characteristic UUID",
+              "notify_characteristic": "Notify characteristic UUID"
+            },
+            "data_description": {
+              "max_read": "Longer reads are split. The verified logger drops the link above 16."
+            }
+          }
         }
       }
     }
@@ -35,7 +88,7 @@
   "services": {
     "read_registers": {
       "name": "Read registers",
-      "description": "Read up to 16 consecutive holding registers (raw words) — for finding a value.",
+      "description": "Read consecutive holding registers (raw words): for finding a value.",
       "fields": {
         "config_entry_id": {
           "name": "Logger",
@@ -47,7 +100,7 @@
         },
         "count": {
           "name": "Count",
-          "description": "How many (1–16)."
+          "description": "How many (1–125)."
         }
       }
     },

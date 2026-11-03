@@ -10,8 +10,12 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.deye_bluetooth import DOMAIN
+from custom_components.deye_bluetooth import options as o
+from custom_components.deye_bluetooth import protocol as p
 from custom_components.deye_bluetooth.diagnostics import async_get_config_entry_diagnostics
+from custom_components.deye_bluetooth.transport import Link
 
+WRITE_UUID = "11111111-2222-3333-4444-555555555555"
 ADDRESS, ADDRESS_2 = "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"
 SERIAL = {3: 12594, 4: 13108, 5: 13622, 6: 14136, 7: 14640}
 
@@ -19,7 +23,8 @@ SERIAL = {3: 12594, 4: 13108, 5: 13622, 6: 14136, 7: 14640}
 class FakeLink:
     """Answers reads from a register dict, keeps writes in it."""
 
-    def __init__(self) -> None:
+    def __init__(self, **settings) -> None:
+        self.settings = settings
         self.regs = {0: 5, 20: 50000, 21: 0, 117: 10, 607: 32, 598: 2300, 599: 2300, 600: 2300, 552: 5, 145: 0, **SERIAL}
         self.connected = False
         self.writes: list[tuple[int, int]] = []
@@ -42,8 +47,8 @@ class FakeLink:
 def _harness(enable_custom_integrations):
     links: list[FakeLink] = []
 
-    def make_link() -> FakeLink:
-        links.append(FakeLink())
+    def make_link(**settings) -> FakeLink:
+        links.append(FakeLink(**settings))
         return links[-1]
 
     with (
@@ -119,6 +124,65 @@ async def test_grid_charge_switch_writes_and_reads_back(hass: HomeAssistant) -> 
     assert hass.states.get("switch.deye_grid_charge").state == "on"
 
 
+async def _options(hass: HomeAssistant, entry: MockConfigEntry, **changes):
+    """Submit the options page with these values changed, the rest as shown."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    values = {opt.section: {} for opt in o.OPTIONS}
+    for opt in o.OPTIONS:
+        values[opt.section][opt.key] = changes.get(opt.key, entry.options.get(opt.key, opt.default))
+    return await hass.config_entries.options.async_configure(result["flow_id"], values)
+
+
+async def test_the_options_change_what_the_code_does(hass: HomeAssistant) -> None:
+    entry = await _add(hass, writes=True)
+    result = await _options(
+        hass, entry, battery_current_max=100, zero_export_max=50, power_step=10, low_soc_min=20, grid_min_voltage=300,
+        grid_charge_target_soc=80, modbus_slave=2, max_read=8, reply_timeout=5, connect_attempts=2,
+        write_characteristic=WRITE_UUID, settings_interval=600,
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    assert entry.options["battery_current_max"] == 100  # flat in the entry
+    assert entry.state is ConfigEntryState.LOADED
+
+    number = hass.states.get("number.deye_inverter_battery_max_charge_current").attributes
+    assert number["max"] == 100
+    assert hass.states.get("number.deye_inverter_zero_export_power").attributes["max"] == 50
+    assert hass.states.get("number.deye_inverter_max_sell_power").attributes["step"] == 10
+    assert hass.states.get("number.deye_inverter_battery_low_soc").attributes["min"] == 20
+    assert entry.runtime_data.link.settings == {
+        "slave": 2, "max_read": 8, "write_char": WRITE_UUID, "notify_char": p.NOTIFY_CHAR,
+        "reply_timeout": 5, "connect_attempts": 2,
+    }
+    entry.runtime_data.link.regs[552] = 0  # relay open, 230 V is now under the option's 300 V
+    entry.runtime_data._fast_at = float("-inf")
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.deye_grid").state == "off"
+
+    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
+    assert (166, 80) in entry.runtime_data.link.writes
+
+
+async def test_the_options_page_refuses_bad_values(hass: HomeAssistant) -> None:
+    entry = await _add(hass)
+    assert (await _options(hass, entry, write_characteristic="nope"))["errors"] == {"base": "bad_uuid"}
+    assert (await _options(hass, entry, stale_after=10, scan_interval=15))["errors"] == {"base": "stale_too_short"}
+    assert entry.options.get("write_characteristic") is None
+
+
+async def test_grid_charge_off_needs_the_inverters_low_soc(hass: HomeAssistant) -> None:
+    entry = await _add(hass, writes=True)
+    entry.runtime_data.link.regs[117] = 250
+    entry.runtime_data._slow_at = float("-inf")
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    with pytest.raises(HomeAssistantError, match="low SoC is not known"):
+        await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
+    assert entry.runtime_data.link.writes == []
+
+
 async def test_read_registers_action(hass: HomeAssistant) -> None:
     await _add(hass)
     result = await hass.services.async_call(
@@ -134,6 +198,23 @@ async def test_unknown_model_warns(hass: HomeAssistant, caplog, _harness) -> Non
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     assert "is not verified" in caplog.text
+
+
+async def test_link_splits_reads_to_the_option() -> None:
+    link = Link(slave=2, max_read=3, write_char=p.WRITE_CHAR, notify_char=p.NOTIFY_CHAR, reply_timeout=1, connect_attempts=1)
+    sent = []
+
+    async def command(payload: bytes) -> str:
+        sent.append(payload)
+        frame = bytes.fromhex(payload.decode().split(",")[1])
+        assert frame[0] == 2  # the slave of the option
+        count = frame[5]
+        body = bytes((2, 3, 2 * count)) + bytes(2 * count)
+        return "+ok=" + (body + p.crc16(body)).hex()
+
+    link._command = command
+    assert await link.read(100, 7) == [0] * 7
+    assert len(sent) == 3
 
 
 async def test_diagnostics_leave_out_serial_and_address(hass: HomeAssistant) -> None:

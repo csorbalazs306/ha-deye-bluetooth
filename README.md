@@ -54,13 +54,31 @@ Copy `custom_components/deye_bluetooth` into your `config/custom_components` fol
 The logger shows up under **Settings → Devices & services** once it is in range. Otherwise use
 **Add integration → Deye Bluetooth**.
 
-Options (the integration's **Configure** button):
+Rated power, device type and the battery's low SoC come from the inverter. Everything else is on the
+options page (the integration's **Configure** button):
 
-| Option | Default | What it does |
+| Section | Option | Default |
 |---|---|---|
-| Live interval | 1 s | Grid phases and load. Each change is a recorder row. |
-| Poll interval | 15 s | Everything else. |
-| Allow writes | off | Lets the controls and `write_register` change the inverter. |
+| Polling | Live interval (grid phases and load, each change is a recorder row) | 1 s |
+| | Poll interval (everything else) | 15 s |
+| | Settings interval | 300 s |
+| | Values / settings go unavailable after | 120 s / 900 s |
+| Writing | Allow writes | off |
+| | Write attempts | 3 |
+| | Grid-charge target SoC | 100 % |
+| Limits | Maximum battery current | 350 A |
+| | Maximum zero export power | 500 W |
+| | Power step | 100 W |
+| | Lowest allowed low SoC | 10 % |
+| | Grid present above (with the relay open) | 100 V |
+| Bluetooth link | Modbus address | 1 |
+| | Registers per read (longer reads are split) | 16 |
+| | Reply timeout, connect attempts | 10 s, 3 |
+| | Write and notify characteristic UUIDs | see [protocol](docs/protocol.md) |
+
+The register map and the discovery UUID are in the code: the inverter cannot report the first, and Home Assistant
+needs the second in `manifest.json`. **Check the limits against your inverter and battery manual before allowing writes:
+the defaults fit the verified model.**
 
 ## Entities
 
@@ -86,7 +104,7 @@ Power limits follow the rated power the inverter reports.
 
 | Action | Fields |
 |---|---|
-| `deye_bluetooth.read_registers` | `address`, `count` (1–16), returns the raw words |
+| `deye_bluetooth.read_registers` | `address`, `count` (1–125), returns the raw words |
 | `deye_bluetooth.write_register` | `address`, `value` (a number or a list) |
 
 With more than one logger, both also need `config_entry_id`.

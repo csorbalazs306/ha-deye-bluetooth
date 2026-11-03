@@ -4,6 +4,10 @@
 
 - Adding a logger by hand no longer aborts while a discovery of the same logger is waiting.
 - Writes confirmed on real hardware (written, read back, restored).
+- Nothing fixed that can vary: limits, thresholds, intervals, the Modbus address, the read size, timeouts and
+  characteristic UUIDs are on the options page, with the old values as defaults.
+- The grid-charge switch no longer guesses a low SoC: it refuses to turn off when the inverter's is not known.
+- `read_registers` reads up to 125 registers, split as the logger needs.
 
 ## 1.0.0
 

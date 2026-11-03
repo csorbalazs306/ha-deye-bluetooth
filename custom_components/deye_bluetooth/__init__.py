@@ -14,7 +14,8 @@ Entities (the prefix is ``deye`` for the first logger, ``deye_2`` for the second
 
 The grid phases and the load are read every second (live_interval: the logger
 answers in ~0.3 s and the values change about every second), everything else
-every 15 s, the settings every 5 min.
+every 15 s, the settings every 5 min (all on the options page, like every limit
+the inverter does not report itself: options.py).
 
 Writes (the controls, the ``deye_bluetooth.write_register`` action) are off until
 the "Allow writes" option is on; each written register is read back and a mismatch
@@ -38,24 +39,16 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from . import options as o
 from . import registers as r
-from .protocol import MAX_READ
+from .protocol import MODBUS_MAX_READ
 from .transport import Link, LinkError, RegisterRejected
 
 DOMAIN = "deye_bluetooth"
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.SELECT, Platform.TIME]
 CONF_ADDRESS = "address"
-CONF_SCAN_S = "scan_interval"
-CONF_WRITES = "allow_writes"
-CONF_LIVE_S = "live_interval"
 CONF_PREFIX = "entity_prefix"
 CONF_ENTRY = "config_entry_id"
-DEFAULT_LIVE_S = 1  # the grid phases and the load: they change about every second
-DEFAULT_SCAN_S = 15  # everything else
-SLOW_EVERY_S = 300
-FAST_STALE_S = 120  # older fast values are unavailable: nothing should act on them
-SLOW_STALE_S = 3 * SLOW_EVERY_S
-WRITE_ATTEMPTS = 3
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,7 +67,7 @@ READ_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_ENTRY): cv.string,
         vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
-        vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_READ)),
+        vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=MODBUS_MAX_READ)),
     }
 )
 
@@ -85,12 +78,15 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
             hass, _LOGGER, config_entry=entry, name=DOMAIN,
-            update_interval=timedelta(seconds=entry.options.get(CONF_LIVE_S, DEFAULT_LIVE_S)),
+            update_interval=timedelta(seconds=entry.options.get(o.LIVE_S, o.DEFAULTS[o.LIVE_S])),
         )
-        self.scan_s: float = entry.options.get(CONF_SCAN_S, DEFAULT_SCAN_S)
         self.address: str = entry.data[CONF_ADDRESS]
         self.prefix: str = entry.data[CONF_PREFIX]
-        self.link = Link()
+        self.link = Link(
+            slave=self.option(o.SLAVE), max_read=self.option(o.MAX_READ), write_char=self.option(o.WRITE_CHAR),
+            notify_char=self.option(o.NOTIFY_CHAR), reply_timeout=self.option(o.REPLY_TIMEOUT),
+            connect_attempts=self.option(o.CONNECT_ATTEMPTS),
+        )
         self.lock = asyncio.Lock()
         self.blocks: dict[int, tuple[float, list[int]]] = {}  # start -> (monotonic, words)
         # never read: monotonic() is the host's uptime, which can be below any interval
@@ -100,9 +96,13 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.failures = 0
         self.last_error = ""
 
+    def option(self, key: str):
+        """What the options page says, or its default."""
+        return self.config_entry.options.get(key, o.DEFAULTS[key])
+
     @property
     def writes_allowed(self) -> bool:
-        return bool(self.config_entry.options.get(CONF_WRITES, False))
+        return bool(self.option(o.WRITES))
 
     async def _ensure_link(self) -> None:
         if self.link.connected:
@@ -124,8 +124,8 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     async def _async_update_data(self) -> dict[int, int]:
         async with self.lock:
             now = monotonic()
-            fast_due = now - self._fast_at >= self.scan_s
-            slow_due = now - self._slow_at >= SLOW_EVERY_S
+            fast_due = now - self._fast_at >= self.option(o.SCAN_S)
+            slow_due = now - self._slow_at >= self.option(o.SETTINGS_S)
             self.full_poll = False
             try:
                 await self._ensure_link()
@@ -149,7 +149,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         return data
 
     def _fresh(self, start: int) -> bool:
-        stale = SLOW_STALE_S if any(start == s for s, _ in r.SLOW) else FAST_STALE_S
+        stale = self.option(o.SETTINGS_STALE_S) if any(start == s for s, _ in r.SLOW) else self.option(o.STALE_S)
         at, _ = self.blocks[start]
         return monotonic() - at < stale
 
@@ -190,14 +190,15 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         await self.async_request_refresh()
 
     async def _write_verified(self, address: int, value: int) -> None:
-        for attempt in range(1, WRITE_ATTEMPTS + 1):
+        attempts = self.option(o.WRITE_ATTEMPTS)
+        for attempt in range(1, attempts + 1):
             try:
                 await self._ensure_link()
                 await self.link.write(address, value)
                 (shown,) = await self.link.read(address, 1)
             except LinkError as exc:
                 await self.link.close()
-                if attempt == WRITE_ATTEMPTS:
+                if attempt == attempts:
                     raise
                 _LOGGER.debug("Deye Bluetooth: write %d=%d attempt %d: %s", address, value, attempt, exc)
                 await asyncio.sleep(2.0 * attempt)
