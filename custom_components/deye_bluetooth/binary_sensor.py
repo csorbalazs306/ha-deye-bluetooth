@@ -1,7 +1,8 @@
 """binary_sensor.deye_grid: on = the grid is there.
 
 Off only when both say so: the grid relay is open (register 552, bit 2) and no
-grid phase has the option's voltage.  An open relay with the grid present (the inverter's self-test after a restart) is not an outage.
+grid phase has the option's voltage.  An open relay with the grid present (the
+inverter's self-test after a restart) is not an outage.
 Stale data (the Bluetooth link is down) is unavailable, never "off".
 """
 from __future__ import annotations
