@@ -1,0 +1,17 @@
+[project]
+name = "ha-deye-bluetooth"
+version = "1.0.0"
+description = "Home Assistant integration for Deye hybrid inverters over the logger's Bluetooth"
+license = "MIT"
+requires-python = ">=3.14"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 130
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

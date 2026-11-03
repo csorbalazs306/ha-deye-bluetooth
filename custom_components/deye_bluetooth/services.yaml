@@ -1,0 +1,41 @@
+read_registers:
+  fields:
+    config_entry_id:
+      example: 01JABCDEFGHJKMNPQRSTVWXYZ0
+      selector:
+        config_entry:
+          integration: deye_bluetooth
+    address:
+      required: true
+      example: 20
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    count:
+      example: 2
+      selector:
+        number:
+          min: 1
+          max: 16
+write_register:
+  fields:
+    config_entry_id:
+      example: 01JABCDEFGHJKMNPQRSTVWXYZ0
+      selector:
+        config_entry:
+          integration: deye_bluetooth
+    address:
+      required: true
+      example: 166
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    value:
+      required: true
+      example: "[20, 20, 20, 20, 20, 20]"
+      selector:
+        object:

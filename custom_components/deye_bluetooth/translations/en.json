@@ -1,0 +1,73 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Deye logger over Bluetooth",
+        "description": "The Wi-Fi/BLE logger is found by its Bluetooth service. Close the Deye phone app: the logger takes one connection at a time.",
+        "data": {
+          "address": "Logger"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This logger is already set up.",
+      "no_devices_found": "No Deye logger in Bluetooth range (service 00000922)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Deye Bluetooth",
+        "data": {
+          "live_interval": "Live interval (s): grid phases and load",
+          "scan_interval": "Poll interval (s): everything else",
+          "allow_writes": "Allow writes (settings, grid-charge switch, write_register)"
+        },
+        "data_description": {
+          "live_interval": "How often the grid phases and the load are read (each change is a recorder row).",
+          "scan_interval": "Battery, PV, inverter, energy counters (default 15 s).",
+          "allow_writes": "Off: read-only. Every write is read back; only changed registers are written."
+        }
+      }
+    }
+  },
+  "services": {
+    "read_registers": {
+      "name": "Read registers",
+      "description": "Read up to 16 consecutive holding registers (raw words) — for finding a value.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Logger",
+          "description": "Which logger. Only needed with more than one."
+        },
+        "address": {
+          "name": "Address",
+          "description": "The first register (decimal)."
+        },
+        "count": {
+          "name": "Count",
+          "description": "How many (1–16)."
+        }
+      }
+    },
+    "write_register": {
+      "name": "Write register",
+      "description": "Write one or more consecutive holding registers (read back; needs Allow writes).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Logger",
+          "description": "Which logger. Only needed with more than one."
+        },
+        "address": {
+          "name": "Address",
+          "description": "The first register (decimal)."
+        },
+        "value": {
+          "name": "Value",
+          "description": "A number, or a list for consecutive registers."
+        }
+      }
+    }
+  }
+}

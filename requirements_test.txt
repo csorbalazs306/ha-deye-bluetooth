@@ -1,0 +1,11 @@
+pytest-homeassistant-custom-component
+ruff
+bleak
+bleak-retry-connector
+habluetooth
+bluetooth-adapters
+bluetooth-auto-recovery
+bluetooth-data-tools
+dbus-fast
+aiousbwatcher
+serialx

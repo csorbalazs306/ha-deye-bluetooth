@@ -1,0 +1,150 @@
+"""The parts free of Home Assistant: the BLE console framing and the register decoding."""
+import importlib.util
+import pathlib
+import sys
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "deye_bluetooth"
+
+
+def load(name):
+    spec = importlib.util.spec_from_file_location(f"deye_bluetooth_{name}", ROOT / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look the module up
+    spec.loader.exec_module(module)
+    return module
+
+
+p = load("protocol")
+r = load("registers")
+
+
+class ProtocolTest(unittest.TestCase):
+    def test_read_frame_as_captured(self):
+        # AT+INVDATA=8,01030002000125CA -> +ok=0103020104B817 (captured from a real logger)
+        frame = p.read_frame(2, 1)
+        self.assertEqual(p.at_command(frame), b"AT+INVDATA=8,01030002000125CA\n")
+        self.assertEqual(p.parse_read("+ok=0103020104B817", 1), [0x0104])
+
+    def test_write_frame_and_ack(self):
+        frame = p.write_frame(0x008F, 100)
+        self.assertEqual(len(frame), 11)
+        self.assertTrue(p.at_command(frame).startswith(b"AT+INVDATA=11,0110008F00010200"))
+        ack = bytes((1, 0x10, 0x00, 0x8F, 0x00, 0x01))
+        p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex().upper(), frame)
+        other = bytes((1, 0x10, 0x00, 0x90, 0x00, 0x01))
+        with self.assertRaises(p.ProtocolError):
+            p.check_write_ack("+ok=" + (other + p.crc16(other)).hex().upper(), frame)
+
+    def test_rejects_bad_replies(self):
+        for reply in ("ERROR", "+ok=0103020104B818", "+ok=zz", "+ok=0183020000"):
+            with self.assertRaises(p.ProtocolError, msg=reply):
+                p.parse_read(reply, 1)
+        exc = bytes((1, 0x83, 0x02))
+        with self.assertRaisesRegex(p.ProtocolError, "exception 0x02"):
+            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+
+    def test_handshake_and_limits(self):
+        self.assertTrue(p.is_handshake("+ok=21521,21521\r\n"))
+        self.assertFalse(p.is_handshake("+ok=0103"))
+        with self.assertRaises(ValueError):
+            p.read_frame(0, 17)
+
+
+class RegistersTest(unittest.TestCase):
+    def test_blocks_fit_the_logger(self):
+        blocks = r.LIVE + r.FAST + r.SLOW
+        for start, count in blocks:
+            self.assertLessEqual(count, p.MAX_READ, start)
+        polled = [start + i for start, count in blocks for i in range(count)]
+        self.assertEqual(len(polled), len(set(polled)))  # no register read twice
+        polled = set(polled)
+        for v in r.VALUES:
+            for word in range(v.words):
+                self.assertIn(v.reg + word, polled, v.key)
+        self.assertEqual(len(r.BY_KEY), len(r.VALUES))  # unique keys
+
+    def test_the_live_blocks_hold_what_the_amp_guard_needs(self):
+        live = {start + i for start, count in r.LIVE for i in range(count)}
+        for key in ("grid_power", "load_power", *(f"grid_{q}_l{n}" for q in ("current", "power") for n in (1, 2, 3))):
+            self.assertIn(r.BY_KEY[key].reg, live, key)
+
+    def test_decoding(self):
+        regs = {
+            607: 32, 604: 0x10000 - 62, 610: 0x10000 - 25,  # grid +32 W, L1 -62 W, -0.25 A
+            598: 2425, 609: 4995,  # 242.5 V, 49.95 Hz
+            586: 1171, 541: 1374,  # 17.1 °C, 37.4 °C
+            587: 5008, 588: 10, 590: 0x10000 - 17,  # 50.08 V, 10 %, -17 W
+            522: 402, 523: 0, 534: 0x86A0, 535: 0x0001,  # 40.2 kWh; 32 bit: 10000.0 kWh
+            672: 300, 673: 0, 674: 0, 675: 5,
+        }
+        d = {v.key: r.decode_value(v, regs) for v in r.VALUES}
+        self.assertEqual((d["grid_power"], d["grid_power_l1"], d["grid_current_l1"]), (32, -62, -0.25))
+        self.assertEqual((d["grid_voltage_l1"], d["grid_frequency"]), (242.5, 49.95))
+        self.assertEqual((d["battery_temperature"], d["ac_temperature"]), (17.1, 37.4))
+        self.assertEqual((d["battery_voltage"], d["battery_soc"], d["battery_power"]), (50.08, 10, -17))
+        self.assertEqual((d["total_import"], d["total_pv"]), (40.2, 10000.0))
+        self.assertIsNone(d["load_power"])  # not polled yet
+        self.assertEqual(r.pv_power(regs), 305)
+
+    def test_times_texts_and_bits(self):
+        regs = {148: 2230, 10: 0xC05C, 223: 0, 22: 0x0203, 552: 0x0C, 111: 9, 62: 0x1A0B, 63: 0x020C, 64: 0x1E05}
+        def get(key):
+            return r.decode_value(r.BY_KEY[key], regs)
+        self.assertEqual(get("program_1_time"), "22:30")
+        self.assertEqual(get("mcu_board_version"), "C05C")
+        self.assertEqual(get("bms_type"), "PYLON")
+        self.assertEqual((get("mppts"), get("phases")), (2, 3))
+        self.assertEqual(get("relay_generator"), 1)
+        self.assertEqual(get("battery_operation_mode"), "unknown (9)")
+        self.assertEqual(get("inverter_clock"), "2026-11-02 12:30:05")
+        self.assertIsNone(r.decode_value(r.BY_KEY["inverter_clock"], {62: 1}))
+        self.assertIsNone(r.decode_value(r.BY_KEY["program_2_time"], regs))
+
+    def test_battery_current_matches_the_power(self):
+        # measured 2026-11-02: -766 W at 52.25 V, register 591 read 0.08 A, 594 read -14.75 A
+        regs = {591: 8, 594: 0x10000 - 1475}
+        self.assertEqual(r.decode_value(r.BY_KEY["battery_current"], regs), -14.75)
+
+    def test_encoding_is_the_opposite_of_decoding(self):
+        for key, value, raw in (("program_1_soc", 80, 80), ("max_sell_power", 5000, 5000),
+                                ("battery_float_voltage", 54.5, 5450), ("battery_temperature", 17.1, 1171)):
+            v = r.BY_KEY[key]
+            self.assertEqual(r.encode_value(v, value), raw, key)
+            self.assertEqual(r.decode_value(v, {v.reg: raw}), value, key)
+        with self.assertRaises(ValueError):
+            r.encode_value(r.BY_KEY["program_1_soc"], -1)
+
+    def test_the_controls_are_single_known_registers(self):
+        keys = [*r.NUMBERS, *r.SELECTS, *r.TIMES, *r.ON_OFF_SWITCHES]
+        self.assertEqual(len(keys), len(set(keys)))
+        for key in keys:
+            self.assertEqual(r.BY_KEY[key].words, 1, key)
+        for key in keys:  # protection and battery chemistry stay in the Deye app
+            self.assertFalse(key.startswith("grid_protection") or key.endswith("_voltage"), key)
+        for low, high, step in r.NUMBERS.values():
+            self.assertLess(low, 1e6 if high is None else high)
+            self.assertGreater(step, 0)
+
+    def test_serial(self):
+        words = [int.from_bytes(b"1234567890"[i:i + 2], "big") for i in range(0, 10, 2)]
+        self.assertEqual(r.decode_serial({3 + i: w for i, w in enumerate(words)}), "1234567890")
+        self.assertIsNone(r.decode_serial({3: 1}))
+
+    def test_identity_as_read_from_the_inverter(self):
+        # registers 0-21 of a SUN-15K-SG05LP3 (the serial replaced)
+        words = [5, 1, 260, 12594, 13108, 13622, 14136, 14640, 0, 0, 0, 6153, 53770, 0,
+                 8455, 4469, 0, 4097, 49244, 0, 18928, 2]
+        regs = dict(enumerate(words))
+        self.assertEqual(r.decode_value(r.BY_KEY["rated_power"], regs), 15000.0)
+        self.assertEqual(r.decode_firmware(regs, "main"), "2107-1175-1809")
+        self.assertEqual(r.decode_firmware(regs, "hmi"), "1001-C05C")
+        self.assertEqual(r.decode_firmware(regs, "protocol"), "0104")
+        self.assertEqual(r.decode_serial(regs), "1234567890")
+        self.assertEqual(r.rated_power(regs), 15000.0)
+        self.assertEqual(r.device_model(regs), "LV 3-phase hybrid, 15 kW")
+        self.assertIn(regs[r.DEVICE_TYPE_REG], r.VERIFIED_DEVICE_TYPES)
+
+
+if __name__ == "__main__":
+    unittest.main()
