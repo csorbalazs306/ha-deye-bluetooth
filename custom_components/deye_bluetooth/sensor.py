@@ -102,8 +102,7 @@ class StateSensor(DeyeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        raw = self.regs.get(500)
-        return None if raw is None else r.STATES.get(raw, f"unknown ({raw})")
+        return r.text(r.STATES, self.regs.get(r.DEVICE_STATE_REG))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -124,5 +123,4 @@ class WorkModeSensor(DeyeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        raw = self.regs.get(142)
-        return None if raw is None else r.WORK_MODES.get(raw, f"unknown ({raw})")
+        return r.text(r.WORK_MODES, self.regs.get(r.WORK_MODE_REG))

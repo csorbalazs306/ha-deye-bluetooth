@@ -50,6 +50,7 @@ SLOW: list[tuple[int, int]] = [
     (340, 2),   # PV power limit, MPPT scanning
     (500, 1),   # device state
 ]
+SLOW_STARTS = frozenset(start for start, _ in SLOW)  # the blocks with their own staleness
 
 DEVICES = {
     0: "unknown", 2: "string inverter", 0x200: "string inverter",
@@ -279,6 +280,10 @@ VALUES: list[Value] = [
     Value("pv4_current", "PV4 current", 683, "A", 0.1),
 ]
 BY_KEY = {v.key: v for v in VALUES}
+DEVICE_STATE_REG = BY_KEY["device_state"].reg
+RELAY_STATUS_REG = BY_KEY["relay_status"].reg
+WORK_MODE_REG = BY_KEY["work_mode"].reg
+GRID_VOLTAGE_KEYS = [f"grid_voltage_l{i}" for i in (1, 2, 3)]
 
 # what the device page can change: every setting of the map, with the dangerous ones.  Left out: readings,
 # identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
@@ -396,6 +401,11 @@ def _decode_clock(regs: dict[int, int]) -> str | None:
     return f"20{a >> 8:02d}-{a & 0xFF:02d}-{b >> 8:02d} {b & 0xFF:02d}:{c >> 8:02d}:{c & 0xFF:02d}"
 
 
+def text(options: dict[int, str], raw: int | None) -> str | None:
+    """The text of a raw word, "unknown (n)" while the map does not name it."""
+    return None if raw is None else options.get(raw, f"unknown ({raw})")
+
+
 def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     """The value from the register words, None while a word is missing."""
     if v.fmt == "clock":
@@ -408,7 +418,7 @@ def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     if v.fmt == "hex":
         return f"{low:04X}"
     if v.options is not None:
-        return v.options.get(low, f"unknown ({low})")
+        return text(v.options, low)
     if v.mask:
         return (low & v.mask) // (v.mask & -v.mask)
     if v.words == 2:

@@ -33,12 +33,15 @@ class GridSensor(DeyeEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return super().available and 552 in self.regs and self._volts() is not None
+        return super().available and r.RELAY_STATUS_REG in self.regs and self._volts() is not None
 
     def _volts(self) -> float | None:
-        volts = [r.decode_value(r.BY_KEY[f"grid_voltage_l{i}"], self.regs) for i in (1, 2, 3)]
+        volts = [r.decode_value(r.BY_KEY[key], self.regs) for key in r.GRID_VOLTAGE_KEYS]
         return None if None in volts else max(volts)
 
     @property
     def is_on(self) -> bool:
-        return bool(self.regs.get(552, 0) & r.GRID_RELAY_BIT) or (self._volts() or 0) >= self.coordinator.option(o.GRID_MIN_V)
+        return (
+            bool(self.regs.get(r.RELAY_STATUS_REG, 0) & r.GRID_RELAY_BIT)
+            or (self._volts() or 0) >= self.coordinator.option(o.GRID_MIN_V)
+        )
