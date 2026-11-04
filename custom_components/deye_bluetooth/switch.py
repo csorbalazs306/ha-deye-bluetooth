@@ -1,10 +1,10 @@
 """switch.deye_grid_charge: the battery charging from the grid.
 
-On: all six Time-of-Use programs charge from the grid up to the option's SoC and the
-inverter's Grid Charge is enabled.  Off: no program charges from the grid and
-their SoC is the battery's low limit, so the battery covers the house down to
-it.  The state is read back from the inverter (Grid Charge and program 1's
-grid flag).
+On: all six Time-of-Use programs charge from the grid and the inverter's Grid
+Charge is enabled.  Off: no program charges from the grid and Grid Charge is
+disabled.  Nothing else is written: each program keeps its own SoC, which is how far
+it charges and how far the battery covers the house.  The state is read back
+from the inverter (Grid Charge and program 1's grid flag).
 """
 from __future__ import annotations
 
@@ -13,11 +13,9 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import DeyeCoordinator
-from . import options as o
 from . import registers as r
 from .entity import ControlEntity, DeyeEntity
 
@@ -53,15 +51,10 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
         await self._set(False)
 
     async def _set(self, on: bool) -> None:
-        low = self.regs.get(r.REG_LOW_SOC)
-        if not on and (low is None or not 0 <= low <= 100):
-            raise HomeAssistantError(f"Deye Bluetooth: the inverter's low SoC is not known ({low})")
-        soc = self.coordinator.option(o.CHARGE_SOC) if on else low
         flags = [
             (w | GRID_FLAG) if on else (w & ~GRID_FLAG)
             for w in (self.regs.get(r.PROGRAM_CHARGE + i, 0) for i in range(6))
         ]
-        await self.coordinator.write(r.PROGRAM_SOC, [soc] * 6)
         await self.coordinator.write(r.PROGRAM_CHARGE, flags)
         await self.coordinator.write(r.REG_GRID_CHARGE, [1 if on else 0])
 

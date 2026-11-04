@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -113,15 +113,38 @@ async def test_writes_are_off_by_default(hass: HomeAssistant) -> None:
     assert entry.runtime_data.link.writes == []
 
 
-async def test_grid_charge_switch_writes_and_reads_back(hass: HomeAssistant) -> None:
+async def test_write_register_is_for_admins_only(hass: HomeAssistant, hass_read_only_user, hass_admin_user) -> None:
     entry = await _add(hass, writes=True)
-    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
+    call = (DOMAIN, "write_register", {"address": 145, "value": 1})
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(*call, blocking=True, context=Context(user_id=hass_read_only_user.id))
+    assert entry.runtime_data.link.writes == []
+    await hass.services.async_call(*call, blocking=True, context=Context(user_id=hass_admin_user.id))
+    assert entry.runtime_data.link.writes == [(145, 1)]
+
+
+async def test_grid_charge_switch_writes_only_the_flags_and_the_enable(hass: HomeAssistant) -> None:
+    entry = await _add(hass, writes=True)
+    coordinator, link = entry.runtime_data, entry.runtime_data.link
+    socs = {166 + i: 30 + 10 * i for i in range(6)}  # someone's own schedule
+    link.regs |= socs | {172: 2, 173: 3}  # two programs with a generator flag
+    coordinator._slow_at = float("-inf")
+    await coordinator.async_refresh()
     await hass.async_block_till_done()
-    link = entry.runtime_data.link
-    assert (130, 1) in link.writes and (172, 1) in link.writes and (166, 100) in link.writes
-    await entry.runtime_data.async_refresh()  # the next poll
-    await hass.async_block_till_done()
+
+    async def flip(service: str) -> list[tuple[int, int]]:
+        link.writes.clear()
+        await hass.services.async_call("switch", service, {"entity_id": "switch.deye_grid_charge"}, blocking=True)
+        await coordinator.async_refresh()  # the next poll
+        await hass.async_block_till_done()
+        return sorted(link.writes)
+
+    assert await flip("turn_on") == [(130, 1), (172, 3), (174, 1), (175, 1), (176, 1), (177, 1)]
     assert hass.states.get("switch.deye_grid_charge").state == "on"
+    assert await flip("turn_off") == [(130, 0), (172, 2), (173, 2), (174, 0), (175, 0), (176, 0), (177, 0)]
+    assert hass.states.get("switch.deye_grid_charge").state == "off"
+    assert {a: link.regs[a] for a in socs} == socs
+    assert hass.states.get("number.deye_inverter_program_1_soc").state == "30"
 
 
 async def _options(hass: HomeAssistant, entry: MockConfigEntry, **changes):
@@ -138,8 +161,8 @@ async def test_the_options_change_what_the_code_does(hass: HomeAssistant) -> Non
     entry = await _add(hass, writes=True)
     result = await _options(
         hass, entry, battery_current_max=100, zero_export_max=50, power_step=10, low_soc_min=20, grid_min_voltage=300,
-        grid_charge_target_soc=80, modbus_slave=2, max_read=8, reply_timeout=5, connect_attempts=2,
-        write_characteristic=WRITE_UUID, settings_interval=600,
+        modbus_slave=2, max_read=8, reply_timeout=5, connect_attempts=2, write_characteristic=WRITE_UUID,
+        settings_interval=600,
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
@@ -161,26 +184,12 @@ async def test_the_options_change_what_the_code_does(hass: HomeAssistant) -> Non
     await hass.async_block_till_done()
     assert hass.states.get("binary_sensor.deye_grid").state == "off"
 
-    await hass.services.async_call("switch", "turn_on", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
-    assert (166, 80) in entry.runtime_data.link.writes
-
 
 async def test_the_options_page_refuses_bad_values(hass: HomeAssistant) -> None:
     entry = await _add(hass)
     assert (await _options(hass, entry, write_characteristic="nope"))["errors"] == {"base": "bad_uuid"}
     assert (await _options(hass, entry, stale_after=10, scan_interval=15))["errors"] == {"base": "stale_too_short"}
     assert entry.options.get("write_characteristic") is None
-
-
-async def test_grid_charge_off_needs_the_inverters_low_soc(hass: HomeAssistant) -> None:
-    entry = await _add(hass, writes=True)
-    entry.runtime_data.link.regs[117] = 250
-    entry.runtime_data._slow_at = float("-inf")
-    await entry.runtime_data.async_refresh()
-    await hass.async_block_till_done()
-    with pytest.raises(HomeAssistantError, match="low SoC is not known"):
-        await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
-    assert entry.runtime_data.link.writes == []
 
 
 async def test_read_registers_action(hass: HomeAssistant) -> None:

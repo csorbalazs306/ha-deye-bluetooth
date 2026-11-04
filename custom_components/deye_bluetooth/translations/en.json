@@ -44,12 +44,10 @@
             "name": "Writing to the inverter",
             "data": {
               "allow_writes": "Allow writes (settings, grid-charge switch, write_register)",
-              "write_attempts": "Write attempts",
-              "grid_charge_target_soc": "Grid-charge target SoC (%)"
+              "write_attempts": "Write attempts"
             },
             "data_description": {
-              "allow_writes": "Off: read-only. Every write is read back; only changed registers are written.",
-              "grid_charge_target_soc": "How far the grid-charge switch charges the battery."
+              "allow_writes": "Off: read-only. Every write is read back; only changed registers are written."
             }
           },
           "limits": {
@@ -106,7 +104,7 @@
     },
     "write_register": {
       "name": "Write register",
-      "description": "Write one or more consecutive holding registers (read back; needs Allow writes).",
+      "description": "Write one or more consecutive holding registers (read back; admin only, needs Allow writes).",
       "fields": {
         "config_entry_id": {
           "name": "Logger",

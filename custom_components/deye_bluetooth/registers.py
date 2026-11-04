@@ -303,8 +303,8 @@ SELECTS: dict[str, dict[int, str]] = {
 TIMES = [f"program_{i}_time" for i in range(1, 7)]
 ON_OFF_SWITCHES = ["solar_sell"]
 
-PROGRAM_SOC, PROGRAM_CHARGE = 166, 172  # six consecutive registers each
-REG_GRID_CHARGE, REG_LOW_SOC = 130, 117
+PROGRAM_CHARGE = 172  # six consecutive registers
+REG_GRID_CHARGE = 130
 SERIAL_REG, SERIAL_WORDS = 3, 5
 ALARM_REGS = range(553, 559)
 DEVICE_TYPE_REG = 0

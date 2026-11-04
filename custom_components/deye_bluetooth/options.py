@@ -1,7 +1,7 @@
 """Everything the options page sets, with its default and its range.
 
-What the inverter reports itself (rated power, device type, low SoC) is read from
-it and has no option.  What is a fact of the protocol (the register map, the
+What the inverter reports itself (rated power, device type) is read from it and
+has no option.  What is a fact of the protocol (the register map, the
 service UUID of manifest.json) stays in the code.
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ STALE_S = "stale_after"
 SETTINGS_STALE_S = "settings_stale_after"
 WRITES = "allow_writes"
 WRITE_ATTEMPTS = "write_attempts"
-CHARGE_SOC = "grid_charge_target_soc"
 GRID_MIN_V = "grid_min_voltage"
 CURRENT_MAX = "battery_current_max"
 ZERO_EXPORT_MAX = "zero_export_max"
@@ -51,7 +50,6 @@ OPTIONS = (
     Option(SETTINGS_STALE_S, POLLING, 900, 60, 86400),
     Option(WRITES, CONTROL, False),
     Option(WRITE_ATTEMPTS, CONTROL, 3, 1, 10),
-    Option(CHARGE_SOC, CONTROL, 100, 1, 100),
     Option(GRID_MIN_V, LIMITS, 100, 0, 500),
     Option(CURRENT_MAX, LIMITS, 350, 1, 2000),
     Option(ZERO_EXPORT_MAX, LIMITS, 500, 1, 10000),

@@ -17,9 +17,9 @@ answers in ~0.3 s and the values change about every second), everything else
 every 15 s, the settings every 5 min (all on the options page, like every limit
 the inverter does not report itself: options.py).
 
-Writes (the controls, the ``deye_bluetooth.write_register`` action) are off until
-the "Allow writes" option is on; each written register is read back and a mismatch
-is an error.  Only changed registers are written (EEPROM).
+Writes (the controls, the admin-only ``deye_bluetooth.write_register`` action) are
+off until the "Allow writes" option is on; each written register is read back and a
+mismatch is an error.  Only changed registers are written (EEPROM).
 """
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -233,7 +234,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         start, count = call.data["address"], call.data["count"]
         return {"address": start, "values": await _coordinator(hass, call).read(start, count)}
 
-    hass.services.async_register(DOMAIN, "write_register", write_register, schema=WRITE_SCHEMA)
+    async_register_admin_service(hass, DOMAIN, "write_register", write_register, schema=WRITE_SCHEMA)
     hass.services.async_register(DOMAIN, "read_registers", read_registers, schema=READ_SCHEMA,
                                  supports_response=SupportsResponse.ONLY)
     return True
