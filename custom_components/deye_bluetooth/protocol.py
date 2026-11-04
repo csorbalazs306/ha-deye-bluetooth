@@ -46,17 +46,22 @@ def _frame(body: bytes) -> bytes:
     return body + crc16(body)
 
 
+def _request(function: int, address: int, tail: bytes, slave: int) -> bytes:
+    """A Modbus RTU request: slave, function, address, then the function's own bytes."""
+    return _frame(bytes((slave, function)) + address.to_bytes(2, "big") + tail)
+
+
 def read_frame(address: int, count: int, slave: int = SLAVE, max_read: int = MAX_READ) -> bytes:
     if not 1 <= count <= max_read:
         raise ValueError(f"read of {count} registers (1..{max_read})")
-    return _frame(bytes((slave, READ)) + address.to_bytes(2, "big") + count.to_bytes(2, "big"))
+    return _request(READ, address, count.to_bytes(2, "big"), slave)
 
 
 def write_frame(address: int, value: int, slave: int = SLAVE) -> bytes:
     """Function 0x10 for one register (what the Deye app sends)."""
     if not 0 <= value <= 0xFFFF:
         raise ValueError(f"register value {value} out of 0..65535")
-    return _frame(bytes((slave, WRITE)) + address.to_bytes(2, "big") + b"\x00\x01\x02" + value.to_bytes(2, "big"))
+    return _request(WRITE, address, b"\x00\x01\x02" + value.to_bytes(2, "big"), slave)
 
 
 def at_command(frame: bytes) -> bytes:
@@ -67,7 +72,7 @@ def is_handshake(reply: str) -> bool:
     return _HANDSHAKE.fullmatch(reply.strip()) is not None
 
 
-def _body(reply: str) -> bytes:
+def _body(reply: str, function: int) -> bytes:
     reply = reply.strip()
     if not reply.startswith("+ok="):
         raise ProtocolError(f"no +ok= in {reply!r}")
@@ -82,17 +87,19 @@ def _body(reply: str) -> bytes:
         raise ProtocolError(f"CRC mismatch: {reply!r}")
     if body[1] & 0x80:
         raise ModbusRejected(f"Modbus exception 0x{body[2]:02X} (function 0x{body[1] & 0x7F:02X})")
+    if body[1] != function:
+        raise ProtocolError(f"function 0x{body[1]:02X}, expected 0x{function:02X}: {reply!r}")
     return body
 
 
 def parse_read(reply: str, count: int) -> list[int]:
-    body = _body(reply)
-    if body[1] != READ or body[2] != 2 * count or len(body) != 3 + 2 * count:
+    body = _body(reply, READ)
+    if body[2] != 2 * count or len(body) != 3 + 2 * count:
         raise ProtocolError(f"not a read of {count} registers: {reply!r}")
     return [int.from_bytes(body[i:i + 2], "big") for i in range(3, len(body), 2)]
 
 
 def check_write_ack(reply: str, frame: bytes) -> None:
-    body = _body(reply)
-    if body[1] != WRITE or body[2:6] != frame[2:6]:
+    body = _body(reply, WRITE)
+    if body[2:6] != frame[2:6]:
         raise ProtocolError(f"write not acknowledged: {reply!r}")
