@@ -136,22 +136,21 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 continue
             self.blocks[start] = (monotonic(), words)
 
+    async def _poll(self, blocks: list[tuple[int, int]], last: float, interval: str) -> tuple[float, bool]:
+        """Read a group when its interval passed: the stamp to keep, and whether it read."""
+        if monotonic() - last < self.option(interval):
+            return last, False
+        await self._read_blocks(blocks)
+        return monotonic(), True
+
     async def _async_update_data(self) -> dict[int, int]:
         async with self.lock:
-            now = monotonic()
-            fast_due = now - self._fast_at >= self.option(o.SCAN_S)
-            slow_due = now - self._slow_at >= self.option(o.SETTINGS_S)
             self.full_poll = False
             try:
                 await self._ensure_link()
                 await self._read_blocks(r.LIVE)
-                if fast_due:
-                    await self._read_blocks(r.FAST)
-                    self._fast_at = monotonic()
-                    self.full_poll = True
-                if slow_due:
-                    await self._read_blocks(r.SLOW)
-                    self._slow_at = monotonic()
+                self._fast_at, self.full_poll = await self._poll(r.FAST, self._fast_at, o.SCAN_S)
+                self._slow_at, _ = await self._poll(r.SLOW, self._slow_at, o.SETTINGS_S)
                 self.failures, self.last_error = 0, ""
             except LinkError as exc:
                 self.failures += 1
@@ -164,7 +163,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         return data
 
     def _fresh(self, start: int) -> bool:
-        stale = self.option(o.SETTINGS_STALE_S) if any(start == s for s, _ in r.SLOW) else self.option(o.STALE_S)
+        stale = self.option(o.SETTINGS_STALE_S) if start in r.SLOW_STARTS else self.option(o.STALE_S)
         at, _ = self.blocks[start]
         return monotonic() - at < stale
 
