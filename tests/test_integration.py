@@ -147,6 +147,38 @@ async def test_grid_charge_switch_writes_only_the_flags_and_the_enable(hass: Hom
     assert hass.states.get("number.deye_inverter_program_1_soc").state == "30"
 
 
+async def test_the_dangerous_settings_write_like_the_others(hass: HomeAssistant) -> None:
+    entry = await _add(hass, writes=True)
+    link = entry.runtime_data.link
+
+    async def number(key: str, value: float) -> None:
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": f"number.deye_inverter_{key}", "value": value}, blocking=True
+        )
+
+    await number("grid_protection_voltage_high", 253.5)
+    await number("grid_protection_frequency_low", 47.5)
+    await number("battery_float_voltage", 54.5)
+    await number("battery_temperature_compensation", -30)
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": "select.deye_inverter_battery_control_mode", "option": "lithium"},
+        blocking=True,
+    )
+    assert link.writes == [(185, 2535), (188, 4750), (101, 5450), (107, 0x10000 - 30), (98, 1)]
+    await hass.async_block_till_done()
+    assert hass.states.get("number.deye_inverter_grid_protection_voltage_high").state == "253.5"
+
+
+async def test_the_dangerous_settings_stay_behind_allow_writes(hass: HomeAssistant) -> None:
+    entry = await _add(hass)
+    with pytest.raises(HomeAssistantError, match="writes are off"):
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": "number.deye_inverter_grid_protection_voltage_high", "value": 253},
+            blocking=True,
+        )
+    assert entry.runtime_data.link.writes == []
+
+
 async def _options(hass: HomeAssistant, entry: MockConfigEntry, **changes):
     """Submit the options page with these values changed, the rest as shown."""
     result = await hass.config_entries.options.async_init(entry.entry_id)

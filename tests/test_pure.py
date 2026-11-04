@@ -114,14 +114,20 @@ class RegistersTest(unittest.TestCase):
             self.assertEqual(r.decode_value(v, {v.reg: raw}), value, key)
         with self.assertRaises(ValueError):
             r.encode_value(r.BY_KEY["program_1_soc"], -1)
+        compensation = r.BY_KEY["battery_temperature_compensation"]
+        self.assertEqual(r.encode_value(compensation, -30), 0x10000 - 30)
+        self.assertEqual(r.decode_value(compensation, {compensation.reg: 0x10000 - 30}), -30)
 
     def test_the_controls_are_single_known_registers(self):
         keys = [*r.NUMBERS, *r.SELECTS, *r.TIMES, *r.ON_OFF_SWITCHES]
         self.assertEqual(len(keys), len(set(keys)))
         for key in keys:
             self.assertEqual(r.BY_KEY[key].words, 1, key)
-        for key in keys:  # protection and battery chemistry stay in the Deye app
-            self.assertFalse(key.startswith("grid_protection") or key.endswith("_voltage"), key)
+        for key in ("grid_protection_voltage_high", "grid_protection_frequency_low", "battery_float_voltage",
+                    "battery_control_mode", "bms_type", "grid_voltage_setting", "ac_coupling"):
+            self.assertIn(key, keys)
+        for key in ("modbus_address", "bms_soc", "battery_voltage", "fault_1"):  # identity and readings
+            self.assertNotIn(key, keys)
         for low, high, step in r.NUMBERS.values():
             if isinstance(low, int) and isinstance(high, int):
                 self.assertLess(low, high)

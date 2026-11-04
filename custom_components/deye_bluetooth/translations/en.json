@@ -47,7 +47,7 @@
               "write_attempts": "Write attempts"
             },
             "data_description": {
-              "allow_writes": "Off: read-only. Every write is read back; only changed registers are written."
+              "allow_writes": "Off: read-only. On: every setting can be changed, including grid protection and battery voltages, with no safety checks. Wrong values can damage equipment or break grid rules. Every write is read back; only changed registers are written."
             }
           },
           "limits": {
