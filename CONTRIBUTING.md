@@ -21,7 +21,7 @@ git clone https://github.com/csorbalazs306/ha-deye-bluetooth.git
 cd ha-deye-bluetooth
 python3.14 -m venv .venv
 . .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements_test.txt
+pip install -r requirements_test.txt ruff
 ```
 
 Home Assistant itself is not needed: `pytest-homeassistant-custom-component` brings the test harness. Bluetooth is
