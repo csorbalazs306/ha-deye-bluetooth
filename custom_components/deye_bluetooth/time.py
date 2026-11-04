@@ -25,7 +25,7 @@ class ProgramTime(ControlEntity, TimeEntity):
 
     @property
     def native_value(self) -> time | None:
-        raw = self.regs.get(self._value.reg)
+        raw = self.raw
         if raw is None or raw // 100 > 23 or raw % 100 > 59:
             return None
         return time(raw // 100, raw % 100)

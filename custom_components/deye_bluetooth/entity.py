@@ -91,10 +91,10 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
     _attr_has_entity_name = True
     live = False
 
-    def __init__(self, coordinator: DeyeCoordinator, key: str, entity_id: str) -> None:
+    def __init__(self, coordinator: DeyeCoordinator, key: str, domain: str, object_id: str) -> None:
+        """object_id is the entity id of the first logger ("deye..."); the prefix replaces its "deye"."""
         super().__init__(coordinator)
-        platform, object_id = entity_id.split(".")
-        self.entity_id = f"{platform}.{coordinator.prefix}{object_id.removeprefix('deye')}"
+        self.entity_id = f"{domain}.{coordinator.prefix}{object_id.removeprefix('deye')}"
         self._attr_unique_id = f"{coordinator.config_entry.unique_id}_{key}"
         self._attr_device_info = coordinator.device_info
 
@@ -108,6 +108,10 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
     def regs(self) -> dict[int, int]:
         return self.coordinator.data or {}
 
+    def _present(self, *addresses: int) -> bool:
+        """True while the data holds every one of these registers."""
+        return all(address in self.regs for address in addresses)
+
 
 class ControlEntity(DeyeEntity):
     """One register the device page can change; it writes only when someone does."""
@@ -115,13 +119,18 @@ class ControlEntity(DeyeEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: DeyeCoordinator, key: str, domain: str) -> None:
-        super().__init__(coordinator, f"{key}_control", f"{domain}.{DETAIL_PREFIX}{key}")
+        super().__init__(coordinator, f"{key}_control", domain, f"{DETAIL_PREFIX}{key}")
         self._value = r.BY_KEY[key]
         self._attr_name = self._value.name
 
     @property
+    def raw(self) -> int | None:
+        """The register's word, as the inverter has it."""
+        return self.regs.get(self._value.reg)
+
+    @property
     def available(self) -> bool:
-        return super().available and self._value.reg in self.regs
+        return super().available and self._present(self._value.reg)
 
     async def _write(self, raw: int) -> None:
         await self.coordinator.write(self._value.reg, [raw])

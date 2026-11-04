@@ -29,11 +29,11 @@ class GridSensor(DeyeEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.POWER
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "deye_grid", "binary_sensor.deye_grid")
+        super().__init__(coordinator, "deye_grid", "binary_sensor", "deye_grid")
 
     @property
     def available(self) -> bool:
-        return super().available and r.RELAY_STATUS_REG in self.regs and self._volts() is not None
+        return super().available and self._present(r.RELAY_STATUS_REG) and self._volts() is not None
 
     def _volts(self) -> float | None:
         volts = [r.decode_value(r.BY_KEY[key], self.regs) for key in r.GRID_VOLTAGE_KEYS]

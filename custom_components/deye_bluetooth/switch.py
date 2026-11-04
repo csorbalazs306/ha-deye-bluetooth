@@ -34,11 +34,11 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
     _attr_icon = "mdi:transmission-tower-import"
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "deye_grid_charge", "switch.deye_grid_charge")
+        super().__init__(coordinator, "deye_grid_charge", "switch", "deye_grid_charge")
 
     @property
     def available(self) -> bool:
-        return super().available and r.REG_GRID_CHARGE in self.regs and r.PROGRAM_CHARGE in self.regs
+        return super().available and self._present(r.REG_GRID_CHARGE, r.PROGRAM_CHARGE)
 
     @property
     def is_on(self) -> bool:

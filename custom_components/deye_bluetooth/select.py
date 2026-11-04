@@ -26,7 +26,7 @@ class SettingSelect(ControlEntity, SelectEntity):
 
     @property
     def current_option(self) -> str | None:
-        return self._by_raw.get(self.regs.get(self._value.reg))
+        return self._by_raw.get(self.raw)
 
     async def async_select_option(self, option: str) -> None:
         await self._write(self._by_text[option])

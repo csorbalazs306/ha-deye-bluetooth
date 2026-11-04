@@ -30,7 +30,7 @@ DIAGNOSTIC_KEYS = ("relay_status", "relay_generator", "device_state", "device_al
 
 class SummaryValueSensor(DeyeEntity, SensorEntity):
     def __init__(self, coordinator: DeyeCoordinator, desc: SummarySensor) -> None:
-        super().__init__(coordinator, desc.object_id, f"sensor.{desc.object_id}")
+        super().__init__(coordinator, desc.object_id, "sensor", desc.object_id)
         self._desc = desc
         self.live = desc.live
         self._attr_name = desc.name
@@ -50,7 +50,7 @@ class DetailSensor(DeyeEntity, SensorEntity):
     """sensor.deye_inverter_<key>: one register value as the inverter reports it."""
 
     def __init__(self, coordinator: DeyeCoordinator, value: r.Value) -> None:
-        super().__init__(coordinator, value.key, f"sensor.{DETAIL_PREFIX}{value.key}")
+        super().__init__(coordinator, value.key, "sensor", f"{DETAIL_PREFIX}{value.key}")
         self._value = value
         self._attr_name = value.name
         self._attr_native_unit_of_measurement = value.unit
@@ -72,7 +72,7 @@ class SerialSensor(DeyeEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "serial", f"sensor.{DETAIL_PREFIX}serial")
+        super().__init__(coordinator, "serial", "sensor", f"{DETAIL_PREFIX}serial")
 
     @property
     def native_value(self):
@@ -83,7 +83,7 @@ class FirmwareSensor(DeyeEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DeyeCoordinator, part: str) -> None:
-        super().__init__(coordinator, f"firmware_{part}", f"sensor.{DETAIL_PREFIX}firmware_{part}")
+        super().__init__(coordinator, f"firmware_{part}", "sensor", f"{DETAIL_PREFIX}firmware_{part}")
         self._part = part
         self._attr_name = f"Firmware {part}"
 
@@ -98,7 +98,7 @@ class StateSensor(DeyeEntity, SensorEntity):
     _attr_name = "State"
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "state", f"sensor.{DETAIL_PREFIX}state")
+        super().__init__(coordinator, "state", "sensor", f"{DETAIL_PREFIX}state")
 
     @property
     def native_value(self):
@@ -119,7 +119,7 @@ class WorkModeSensor(DeyeEntity, SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "work_mode_name", f"sensor.{DETAIL_PREFIX}work_mode_name")
+        super().__init__(coordinator, "work_mode_name", "sensor", f"{DETAIL_PREFIX}work_mode_name")
 
     @property
     def native_value(self):
