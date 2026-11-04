@@ -1,6 +1,7 @@
-"""Sensors: the summary and every decoded register."""
+"""Sensors: the summary, every decoded register, and the few values built from several."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
@@ -13,6 +14,28 @@ from . import DeyeCoordinator
 from . import registers as r
 from .entity import DETAIL_PREFIX, SUMMARY_SENSORS, UNIT_CLASSES, DeyeEntity, SummarySensor
 
+DIAGNOSTIC_KEYS = ("relay_status", "relay_generator", "device_state", "device_alarm", "fault_1", "fault_2")
+
+Decoder = Callable[[dict[int, int]], Any]
+
+
+def _firmware(part: str) -> Decoder:
+    """One firmware part, as the Deye app shows it."""
+    return lambda regs: r.decode_firmware(regs, part)
+
+
+def _choice(options: dict[int, str], reg: int) -> Decoder:
+    """The text of one register word."""
+    return lambda regs: r.text(options, regs.get(reg))
+
+
+# the diagnostic values that are not one register: key, name, decoder
+DERIVED: list[tuple[str, str, Decoder]] = [
+    ("serial", "Serial number", r.decode_serial),
+    ("work_mode_name", "Work mode name", _choice(r.WORK_MODES, r.WORK_MODE_REG)),
+    *((f"firmware_{part}", f"Firmware {part}", _firmware(part)) for part in r.FIRMWARE),
+]
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -20,15 +43,20 @@ async def async_setup_entry(
     coordinator: DeyeCoordinator = entry.runtime_data
     entities: list[SensorEntity] = [SummaryValueSensor(coordinator, s) for s in SUMMARY_SENSORS]
     entities += [DetailSensor(coordinator, v) for v in r.VALUES]
-    entities += [SerialSensor(coordinator), StateSensor(coordinator), WorkModeSensor(coordinator)]
-    entities += [FirmwareSensor(coordinator, part) for part in r.FIRMWARE]
+    entities += [DerivedSensor(coordinator, *spec) for spec in DERIVED]
+    entities += [StateSensor(coordinator)]
     async_add_entities(entities)
 
 
-DIAGNOSTIC_KEYS = ("relay_status", "relay_generator", "device_state", "device_alarm", "fault_1", "fault_2")
+class _ValueSensor(DeyeEntity, SensorEntity):
+    """A sensor decoded from the registers: unavailable while its value cannot be decoded."""
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.native_value is not None
 
 
-class SummaryValueSensor(DeyeEntity, SensorEntity):
+class SummaryValueSensor(_ValueSensor):
     def __init__(self, coordinator: DeyeCoordinator, desc: SummarySensor) -> None:
         super().__init__(coordinator, desc.object_id, "sensor", desc.object_id)
         self._desc = desc
@@ -41,12 +69,8 @@ class SummaryValueSensor(DeyeEntity, SensorEntity):
     def native_value(self):
         return self._desc.value(self.regs)
 
-    @property
-    def available(self) -> bool:
-        return super().available and self.native_value is not None
 
-
-class DetailSensor(DeyeEntity, SensorEntity):
+class DetailSensor(_ValueSensor):
     """sensor.deye_inverter_<key>: one register value as the inverter reports it."""
 
     def __init__(self, coordinator: DeyeCoordinator, value: r.Value) -> None:
@@ -62,34 +86,20 @@ class DetailSensor(DeyeEntity, SensorEntity):
     def native_value(self):
         return r.decode_value(self._value, self.regs)
 
-    @property
-    def available(self) -> bool:
-        return super().available and self.native_value is not None
 
+class DerivedSensor(DeyeEntity, SensorEntity):
+    """A diagnostic sensor whose value is built from the data, not from one register."""
 
-class SerialSensor(DeyeEntity, SensorEntity):
-    _attr_name = "Serial number"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "serial", "sensor", f"{DETAIL_PREFIX}serial")
+    def __init__(self, coordinator: DeyeCoordinator, key: str, name: str, read: Decoder) -> None:
+        super().__init__(coordinator, key, "sensor", f"{DETAIL_PREFIX}{key}")
+        self._attr_name = name
+        self._read = read
 
     @property
     def native_value(self):
-        return r.decode_serial(self.regs)
-
-
-class FirmwareSensor(DeyeEntity, SensorEntity):
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: DeyeCoordinator, part: str) -> None:
-        super().__init__(coordinator, f"firmware_{part}", "sensor", f"{DETAIL_PREFIX}firmware_{part}")
-        self._part = part
-        self._attr_name = f"Firmware {part}"
-
-    @property
-    def native_value(self):
-        return r.decode_firmware(self.regs, self._part)
+        return self._read(self.regs)
 
 
 class StateSensor(DeyeEntity, SensorEntity):
@@ -112,15 +122,3 @@ class StateSensor(DeyeEntity, SensorEntity):
             "last_error": self.coordinator.last_error or None,
             "writes_allowed": self.coordinator.writes_allowed,
         }
-
-
-class WorkModeSensor(DeyeEntity, SensorEntity):
-    _attr_name = "Work mode name"
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "work_mode_name", "sensor", f"{DETAIL_PREFIX}work_mode_name")
-
-    @property
-    def native_value(self):
-        return r.text(r.WORK_MODES, self.regs.get(r.WORK_MODE_REG))
