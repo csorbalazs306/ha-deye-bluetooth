@@ -6,7 +6,7 @@ Holding registers of the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
 ha-solarman ``deye_p3`` profile), decimal.  32-bit values are low word first.
 
 Three poll groups: LIVE every second (grid phases, load), FAST every scan
-(15 s: battery, PV, inverter, energy counters), SLOW every SLOW_EVERY_S
+(15 s: battery, PV, inverter, energy counters), SLOW every settings interval
 (identity, battery and Time-of-Use settings).  Every block
 is at most 16 registers: the logger does not answer longer reads.
 
@@ -281,16 +281,17 @@ BY_KEY = {v.key: v for v in VALUES}
 
 # what the device page can change.  Left out on purpose: grid protection and
 # grid standard, battery type and voltages, generator and AC coupling settings.
-RATED = None  # the maximum is the inverter's own rated power
-NUMBERS: dict[str, tuple[float, float | None, float]] = {  # key: (min, max, step)
-    "max_sell_power": (0, RATED, 100),
-    "zero_export_power": (0, 500, 1),
-    "battery_max_charge_current": (0, 350, 1),
-    "battery_max_discharge_current": (0, 350, 1),
-    "grid_charge_current": (0, 350, 1),
+# A limit is a number, RATED (what the inverter reports) or the name of an option (options.py).
+RATED = None
+NUMBERS: dict[str, tuple[float | str, float | str | None, float | str]] = {  # key: (min, max, step)
+    "max_sell_power": (0, RATED, "power_step"),
+    "zero_export_power": (0, "zero_export_max", 1),
+    "battery_max_charge_current": (0, "battery_current_max", 1),
+    "battery_max_discharge_current": (0, "battery_current_max", 1),
+    "grid_charge_current": (0, "battery_current_max", 1),
     "grid_charge_start_soc": (0, 100, 1),
-    "battery_low_soc": (10, 100, 1),
-    **{f"program_{i}_power": (0, RATED, 100) for i in range(1, 7)},
+    "battery_low_soc": ("low_soc_min", 100, 1),
+    **{f"program_{i}_power": (0, RATED, "power_step") for i in range(1, 7)},
     **{f"program_{i}_soc": (0, 100, 1) for i in range(1, 7)},
 }
 SELECTS: dict[str, dict[int, str]] = {
@@ -302,8 +303,8 @@ SELECTS: dict[str, dict[int, str]] = {
 TIMES = [f"program_{i}_time" for i in range(1, 7)]
 ON_OFF_SWITCHES = ["solar_sell"]
 
-PROGRAM_SOC, PROGRAM_CHARGE = 166, 172  # six consecutive registers each
-REG_GRID_CHARGE, REG_LOW_SOC = 130, 117
+PROGRAM_CHARGE = 172  # six consecutive registers
+REG_GRID_CHARGE = 130
 SERIAL_REG, SERIAL_WORDS = 3, 5
 ALARM_REGS = range(553, 559)
 DEVICE_TYPE_REG = 0

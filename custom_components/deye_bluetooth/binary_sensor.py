@@ -1,7 +1,8 @@
 """binary_sensor.deye_grid: on = the grid is there.
 
-Off only when both say so: the grid relay is open (register 552, bit 2) and no grid phase has GRID_MIN_V.  An open relay with
-the grid present (the inverter's self-test after a restart) is not an outage.
+Off only when both say so: the grid relay is open (register 552, bit 2) and no
+grid phase has the option's voltage.  An open relay with the grid present (the
+inverter's self-test after a restart) is not an outage.
 Stale data (the Bluetooth link is down) is unavailable, never "off".
 """
 from __future__ import annotations
@@ -12,10 +13,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import DeyeCoordinator
+from . import options as o
 from . import registers as r
 from .entity import DeyeEntity
-
-GRID_MIN_V = 100
 
 
 async def async_setup_entry(
@@ -41,4 +41,4 @@ class GridSensor(DeyeEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        return bool(self.regs.get(552, 0) & r.GRID_RELAY_BIT) or (self._volts() or 0) >= GRID_MIN_V
+        return bool(self.regs.get(552, 0) & r.GRID_RELAY_BIT) or (self._volts() or 0) >= self.coordinator.option(o.GRID_MIN_V)

@@ -1,10 +1,10 @@
 """switch.deye_grid_charge: the battery charging from the grid.
 
-On: all six Time-of-Use programs charge from the grid up to CHARGE_SOC and the
-inverter's Grid Charge is enabled.  Off: no program charges from the grid and
-their SoC is the battery's low limit, so the battery covers the house down to
-it.  The state is read back from the inverter (Grid Charge and program 1's
-grid flag).
+On: all six Time-of-Use programs charge from the grid and the inverter's Grid
+Charge is enabled.  Off: no program charges from the grid and Grid Charge is
+disabled.  Nothing else is written: each program keeps its own SoC, which is how far
+it charges and how far the battery covers the house.  The state is read back
+from the inverter (Grid Charge and program 1's grid flag).
 """
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ from . import DeyeCoordinator
 from . import registers as r
 from .entity import ControlEntity, DeyeEntity
 
-CHARGE_SOC = 100
-LOW_SOC = 10  # off, when the inverter's low limit cannot be read
 GRID_FLAG = 0x01  # a program's charge register: bit 0 = from the grid
 
 
@@ -53,13 +51,10 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
         await self._set(False)
 
     async def _set(self, on: bool) -> None:
-        low = self.regs.get(r.REG_LOW_SOC)
-        soc = CHARGE_SOC if on else (low if low is not None and 0 <= low <= 100 else LOW_SOC)
         flags = [
             (w | GRID_FLAG) if on else (w & ~GRID_FLAG)
             for w in (self.regs.get(r.PROGRAM_CHARGE + i, 0) for i in range(6))
         ]
-        await self.coordinator.write(r.PROGRAM_SOC, [soc] * 6)
         await self.coordinator.write(r.PROGRAM_CHARGE, flags)
         await self.coordinator.write(r.REG_GRID_CHARGE, [1 if on else 0])
 

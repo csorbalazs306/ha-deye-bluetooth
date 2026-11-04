@@ -17,11 +17,6 @@ from . import protocol as p
 
 _LOGGER = logging.getLogger(__name__)
 
-WRITE_CHAR = "0000fec7-0000-1000-8000-00805f9b34fb"  # write with response
-NOTIFY_CHAR = "0000fed8-0000-1000-8000-00805f9b34fb"
-REPLY_TIMEOUT_S = 10.0
-DISCONNECT_TIMEOUT_S = 10.0
-
 
 class LinkError(Exception):
     """No link, no reply, or a reply that makes no sense."""
@@ -32,7 +27,15 @@ class RegisterRejected(LinkError):
 
 
 class Link:
-    def __init__(self) -> None:
+    def __init__(
+        self, *, slave: int, max_read: int, write_char: str, notify_char: str, reply_timeout: float, connect_attempts: int
+    ) -> None:
+        self._slave = slave
+        self._max_read = max_read
+        self._write_char = write_char
+        self._notify_char = notify_char
+        self._reply_timeout = reply_timeout
+        self._connect_attempts = connect_attempts
         self._client: BleakClient | None = None
         self._reply: asyncio.Future[str] | None = None
 
@@ -45,13 +48,13 @@ class Link:
         try:
             client = await establish_connection(
                 BleakClient, device, device.name or device.address,
-                disconnected_callback=self._on_disconnect, max_attempts=3,
+                disconnected_callback=self._on_disconnect, max_attempts=self._connect_attempts,
             )
         except Exception as exc:  # noqa: BLE001 — bleak raises many kinds
             raise LinkError(f"connect failed: {exc}") from exc
         self._client = client
         try:
-            await client.start_notify(NOTIFY_CHAR, self._on_notify)
+            await client.start_notify(self._notify_char, self._on_notify)
             if not p.is_handshake(await self._command(b"AT+DTYPE\n")):
                 raise LinkError("unexpected handshake reply")
         except LinkError:
@@ -66,7 +69,7 @@ class Link:
         if client is None:
             return
         try:
-            await asyncio.wait_for(asyncio.shield(client.disconnect()), DISCONNECT_TIMEOUT_S)
+            await asyncio.wait_for(asyncio.shield(client.disconnect()), self._reply_timeout)
         except Exception:  # noqa: BLE001 — best effort, never blocks the caller
             _LOGGER.debug("Deye BLE disconnect did not finish cleanly", exc_info=True)
 
@@ -85,8 +88,8 @@ class Link:
             raise LinkError("not connected")
         self._reply = asyncio.get_running_loop().create_future()
         try:
-            await client.write_gatt_char(WRITE_CHAR, payload, response=True)
-            return await asyncio.wait_for(self._reply, REPLY_TIMEOUT_S)
+            await client.write_gatt_char(self._write_char, payload, response=True)
+            return await asyncio.wait_for(self._reply, self._reply_timeout)
         except LinkError:
             raise
         except TimeoutError as exc:
@@ -97,7 +100,15 @@ class Link:
             self._reply = None
 
     async def read(self, address: int, count: int) -> list[int]:
-        reply = await self._command(p.at_command(p.read_frame(address, count)))
+        """Any number of registers, in reads the logger takes."""
+        words: list[int] = []
+        while len(words) < count:
+            words += await self._read(address + len(words), min(count - len(words), self._max_read))
+        return words
+
+    async def _read(self, address: int, count: int) -> list[int]:
+        frame = p.read_frame(address, count, self._slave, self._max_read)
+        reply = await self._command(p.at_command(frame))
         try:
             return p.parse_read(reply, count)
         except p.ModbusRejected as exc:
@@ -106,7 +117,7 @@ class Link:
             raise LinkError(str(exc)) from exc
 
     async def write(self, address: int, value: int) -> None:
-        frame = p.write_frame(address, value)
+        frame = p.write_frame(address, value, self._slave)
         reply = await self._command(p.at_command(frame))
         try:
             p.check_write_ack(reply, frame)

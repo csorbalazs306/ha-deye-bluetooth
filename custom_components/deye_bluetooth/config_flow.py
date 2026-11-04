@@ -1,14 +1,18 @@
 """UI setup: the logger found over Bluetooth (its service UUID), then options."""
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_discovered_service_info
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 
-from . import CONF_ADDRESS, CONF_LIVE_S, CONF_PREFIX, CONF_SCAN_S, CONF_WRITES, DEFAULT_LIVE_S, DEFAULT_SCAN_S, DOMAIN
+from . import CONF_ADDRESS, CONF_PREFIX, DOMAIN
+from . import options as o
 
 SERVICE_UUID = "00000922-0000-1000-8000-00805f9b34fb"
 
@@ -29,7 +33,8 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             address = user_input[CONF_ADDRESS].upper()
-            await self.async_set_unique_id(address)
+            # not raising: a waiting discovery of this logger must not block adding it by hand
+            await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title=f"Deye logger {self._found.get(address, address)}",
                                            data={CONF_ADDRESS: address, CONF_PREFIX: self._free_prefix()})
@@ -56,20 +61,48 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
         return DeyeBluetoothOptionsFlow()
 
 
+_UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def _validator(option: o.Option):
+    if option.low is not None:
+        return vol.All(vol.Coerce(int), vol.Range(min=option.low, max=option.high))
+    return bool if isinstance(option.default, bool) else str
+
+
+def _schema(current: Mapping[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(name): section(
+                vol.Schema(
+                    {
+                        vol.Required(opt.key, default=current.get(opt.key, opt.default)): _validator(opt)
+                        for opt in o.OPTIONS
+                        if opt.section == name
+                    }
+                ),
+                {"collapsed": collapsed},
+            )
+            for name, collapsed in o.SECTIONS.items()
+        }
+    )
+
+
+def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
+    if not all(_UUID.fullmatch(flat[key]) for key in (o.WRITE_CHAR, o.NOTIFY_CHAR)):
+        return {"base": "bad_uuid"}
+    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
+        return {"base": "stale_too_short"}  # values would go unavailable between two polls
+    return {}
+
+
 class DeyeBluetoothOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        current: Mapping[str, Any] = self.config_entry.options
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        options = self.config_entry.options
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_LIVE_S, default=options.get(CONF_LIVE_S, DEFAULT_LIVE_S)): vol.All(
-                    vol.Coerce(int), vol.Range(min=1, max=15)
-                ),
-                vol.Required(CONF_SCAN_S, default=options.get(CONF_SCAN_S, DEFAULT_SCAN_S)): vol.All(
-                    vol.Coerce(int), vol.Range(min=10, max=600)
-                ),
-                vol.Required(CONF_WRITES, default=options.get(CONF_WRITES, False)): bool,
-            }
-        )
-        return self.async_show_form(step_id="init", data_schema=schema)
+            current = {key: value for group in user_input.values() for key, value in group.items()}  # flat in the entry
+            errors = _errors(current)
+            if not errors:
+                return self.async_create_entry(data=dict(current))
+        return self.async_show_form(step_id="init", data_schema=_schema(current), errors=errors)

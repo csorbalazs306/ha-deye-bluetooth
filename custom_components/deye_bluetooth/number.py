@@ -20,18 +20,31 @@ async def async_setup_entry(
 class SettingNumber(ControlEntity, NumberEntity):
     _attr_mode = NumberMode.BOX
 
-    def __init__(self, coordinator: DeyeCoordinator, key: str, limits: tuple[float, float | None, float]) -> None:
+    def __init__(self, coordinator: DeyeCoordinator, key: str, limits: tuple) -> None:
         super().__init__(coordinator, key, "number")
-        self._attr_native_min_value, self._max, self._attr_native_step = limits
+        self._limits = limits
         self._attr_native_unit_of_measurement = self._value.unit
+
+    def _limit(self, limit: float | str | None) -> float:
+        if limit is r.RATED:
+            return r.rated_power(self.regs) or 0
+        return self.coordinator.option(limit) if isinstance(limit, str) else limit
+
+    @property
+    def native_min_value(self) -> float:
+        return self._limit(self._limits[0])
 
     @property
     def native_max_value(self) -> float:
-        return self._max if self._max is not None else (r.rated_power(self.regs) or 0)
+        return self._limit(self._limits[1])
+
+    @property
+    def native_step(self) -> float:
+        return self._limit(self._limits[2])
 
     @property
     def available(self) -> bool:
-        return super().available and self.native_max_value > 0
+        return super().available and self.native_max_value > self.native_min_value
 
     @property
     def native_value(self):

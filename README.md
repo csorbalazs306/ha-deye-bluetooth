@@ -54,13 +54,30 @@ Copy `custom_components/deye_bluetooth` into your `config/custom_components` fol
 The logger shows up under **Settings → Devices & services** once it is in range. Otherwise use
 **Add integration → Deye Bluetooth**.
 
-Options (the integration's **Configure** button):
+Rated power and device type come from the inverter. Everything else is on the options page (the
+integration's **Configure** button):
 
-| Option | Default | What it does |
+| Section | Option | Default |
 |---|---|---|
-| Live interval | 1 s | Grid phases and load. Each change is a recorder row. |
-| Poll interval | 15 s | Everything else. |
-| Allow writes | off | Lets the controls and `write_register` change the inverter. |
+| Polling | Live interval (grid phases and load, each change is a recorder row) | 1 s |
+| | Poll interval (everything else) | 15 s |
+| | Settings interval | 300 s |
+| | Values / settings go unavailable after | 120 s / 900 s |
+| Writing | Allow writes | off |
+| | Write attempts | 3 |
+| Limits | Maximum battery current | 350 A |
+| | Maximum zero export power | 500 W |
+| | Power step | 100 W |
+| | Lowest allowed low SoC | 10 % |
+| | Grid present above (with the relay open) | 100 V |
+| Bluetooth link | Modbus address | 1 |
+| | Registers per read (longer reads are split) | 16 |
+| | Reply timeout, connect attempts | 10 s, 3 |
+| | Write and notify characteristic UUIDs | see [protocol](docs/protocol.md) |
+
+The register map and the discovery UUID are in the code: the inverter cannot report the first, and Home Assistant
+needs the second in `manifest.json`. **Check the limits against your inverter and battery manual before allowing writes:
+the defaults fit the verified model.**
 
 ## Entities
 
@@ -75,19 +92,33 @@ The first logger gets the prefix `deye`, the second `deye_2`, and so on.
 | `sensor.deye_battery_{soc,power,capacity}` | Battery: discharge > 0, charge < 0 |
 | `sensor.deye_{grid_import,grid_export,load,pv}_energy` | Totals (kWh), for the Energy dashboard |
 | `binary_sensor.deye_grid` | The grid is present |
-| `switch.deye_grid_charge` | Battery charges from the grid |
+| `switch.deye_grid_charge` | Battery charges from the grid, see [below](#grid-charge-switch) |
 | `sensor.deye_inverter_<key>` | Every decoded register |
 | `number.`, `select.`, `time.`, `switch.deye_inverter_<key>` | The settings |
 
 Grid protection, battery chemistry and voltages stay out of the controls on purpose.
 Power limits follow the rated power the inverter reports.
 
+### Grid-charge switch
+
+`switch.deye_grid_charge` writes seven registers and nothing else: the grid flag of all six Time-of-Use programs
+and the inverter's Grid Charge enable.
+
+- **On** sets the flag on every program and enables Grid Charge. Each program charges up to its own SoC, so set
+  `number.deye_inverter_program_<n>_soc` to how far the battery should charge.
+- **Off** clears the flag on every program and disables Grid Charge. The battery still covers the house only down to
+  each program's SoC.
+
+The switch never changes a program's SoC. It does overwrite the grid flags: if only some of your programs charge from
+the grid, the first toggle makes all six the same. A program's generator flag stays as it is. The switch shows on when
+Grid Charge and program 1's flag are both set.
+
 ## Actions
 
 | Action | Fields |
 |---|---|
-| `deye_bluetooth.read_registers` | `address`, `count` (1–16), returns the raw words |
-| `deye_bluetooth.write_register` | `address`, `value` (a number or a list) |
+| `deye_bluetooth.read_registers` | `address`, `count` (1–125), returns the raw words |
+| `deye_bluetooth.write_register` | `address`, `value` (a number or a list). Admin users only |
 
 With more than one logger, both also need `config_entry_id`.
 
@@ -98,7 +129,7 @@ inverter, damage the battery, or break grid rules. You use this at your own risk
 
 Writes are off by default. When on, only changed registers are written (they live in EEPROM)
 and each one is read back; a mismatch is an error. `write_register` accepts **any** register,
-so check the address against your model's map first.
+so only admin users can call it, and you should check the address against your model's map first.
 
 ## Troubleshooting
 

@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import re
 
-SLAVE = 1
+SLAVE = 1  # default, see options.py
+WRITE_CHAR = "0000fec7-0000-1000-8000-00805f9b34fb"  # default: write with response
+NOTIFY_CHAR = "0000fed8-0000-1000-8000-00805f9b34fb"  # default
+MODBUS_MAX_READ = 125  # the Modbus limit
 READ, WRITE = 0x03, 0x10
-MAX_READ = 16  # a longer read is not answered and drops the link
+MAX_READ = 16  # default: this logger does not answer a longer read and drops the link
 
 _HANDSHAKE = re.compile(r"\+ok=\d+,\d+")
 
@@ -43,17 +46,17 @@ def _frame(body: bytes) -> bytes:
     return body + crc16(body)
 
 
-def read_frame(address: int, count: int) -> bytes:
-    if not 1 <= count <= MAX_READ:
-        raise ValueError(f"read of {count} registers (1..{MAX_READ})")
-    return _frame(bytes((SLAVE, READ)) + address.to_bytes(2, "big") + count.to_bytes(2, "big"))
+def read_frame(address: int, count: int, slave: int = SLAVE, max_read: int = MAX_READ) -> bytes:
+    if not 1 <= count <= max_read:
+        raise ValueError(f"read of {count} registers (1..{max_read})")
+    return _frame(bytes((slave, READ)) + address.to_bytes(2, "big") + count.to_bytes(2, "big"))
 
 
-def write_frame(address: int, value: int) -> bytes:
+def write_frame(address: int, value: int, slave: int = SLAVE) -> bytes:
     """Function 0x10 for one register (what the Deye app sends)."""
     if not 0 <= value <= 0xFFFF:
         raise ValueError(f"register value {value} out of 0..65535")
-    return _frame(bytes((SLAVE, WRITE)) + address.to_bytes(2, "big") + b"\x00\x01\x02" + value.to_bytes(2, "big"))
+    return _frame(bytes((slave, WRITE)) + address.to_bytes(2, "big") + b"\x00\x01\x02" + value.to_bytes(2, "big"))
 
 
 def at_command(frame: bytes) -> bytes:

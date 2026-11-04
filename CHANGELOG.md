@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+- The grid-charge switch writes only the six programs' grid flags and the Grid Charge enable. It no longer changes a
+  program's SoC, so each program charges up to its own SoC, and the *Grid-charge target SoC* option is gone.
+  **Check your program SoC values after updating:** earlier versions left all six at the target SoC or the low SoC,
+  whichever the last flip wrote. The battery covers the house only down to a program's SoC, so a program left at 100 %
+  holds it full.
+- `deye_bluetooth.write_register` can only be called by an admin user.
+
+## 1.0.1
+
+- Adding a logger by hand no longer aborts while a discovery of the same logger is waiting.
+- Writes confirmed on real hardware (written, read back, restored).
+- Nothing fixed that can vary: limits, thresholds, intervals, the Modbus address, the read size, timeouts and
+  characteristic UUIDs are on the options page, with the old values as defaults.
+- The grid-charge switch no longer guesses a low SoC: it refuses to turn off when the inverter's is not known.
+- `read_registers` reads up to 125 registers, split as the logger needs.
+
 ## 1.0.0
 
 First public release, extracted from a private Home Assistant setup where it has
