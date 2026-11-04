@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- Every setting of the register map is now a control: grid protection, grid standard, battery chemistry and voltages,
+  generator, smart load, AC coupling and peak shaving. **These write without safety checks, once *Allow writes* is on, and
+  most are not tried on real hardware.** Read the extended disclaimer in the README.
+- Signed settings accept negative values (battery temperature compensation).
+- README: tidier page, HACS default install.
+
 ## 1.1.0
 
 - The grid-charge switch writes only the six programs' grid flags and the Grid Charge enable. It no longer changes a

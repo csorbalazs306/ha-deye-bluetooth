@@ -1,11 +1,17 @@
+<img src="https://raw.githubusercontent.com/csorbalazs306/ha-deye-bluetooth/main/custom_components/deye_bluetooth/brand/icon.png" alt="" width="96">
+
 # Deye Bluetooth for Home Assistant
 
 [![Validate](https://github.com/csorbalazs306/ha-deye-bluetooth/actions/workflows/validate.yml/badge.svg)](https://github.com/csorbalazs306/ha-deye-bluetooth/actions/workflows/validate.yml)
 [![Tests](https://github.com/csorbalazs306/ha-deye-bluetooth/actions/workflows/tests.yml/badge.svg)](https://github.com/csorbalazs306/ha-deye-bluetooth/actions/workflows/tests.yml)
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories/)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://hacs.xyz)
 
-Reads and controls a Deye hybrid inverter locally, through the Bluetooth console of its
-Wi-Fi/BLE logger. No cloud, no extra wiring, no Modbus adapter.
+**Read and control a Deye hybrid inverter locally, through the Bluetooth console of its Wi-Fi/BLE logger.**
+No cloud, no extra wiring, no Modbus adapter.
+
+> [!WARNING]
+> With *Allow writes* on, this integration can change every inverter setting, including grid protection and battery
+> voltages, with no safety checks. Read [Writing to the inverter](#writing-to-the-inverter) first.
 
 This is an independent project, not made by or affiliated with Deye.
 
@@ -13,17 +19,18 @@ This is an independent project, not made by or affiliated with Deye.
 
 - **Live data**: grid phases and load every second, everything else every 15 s (configurable).
 - **Every decoded register** as a sensor: PV, battery, BMS, grid, inverter, generator, energy counters, faults.
-- **Settings on the device page**: Time-of-Use programs, work mode, charge limits, solar sell.
+- **Every setting on the device page**: Time-of-Use programs, work mode, charge limits, solar sell, battery voltages and
+  chemistry, generator, grid protection.
 - **Grid-charge switch** and a **grid-present** binary sensor.
 - **Discovered automatically** over Bluetooth, set up in the UI.
 - **Several loggers** on one Home Assistant.
-- **Safe by default**: read-only until you turn on *Allow writes*.
+- **Read-only by default**: nothing is written until you turn on *Allow writes*.
 
 ## Compatibility
 
-| | Status |
+| Inverter | Status |
 |---|---|
-| SUN-15K-SG05LP3-EU-SM2 with logger `DYDA_WiBLE_1.6.2` | **Verified**: reads and writes |
+| SUN-15K-SG05LP3-EU-SM2 with logger `DYDA_WiBLE_1.6.2` | **Verified**: reads and writes, except the settings [listed below](#writing-to-the-inverter) |
 | Other Deye 3-phase LV hybrids | Untested, likely to read correctly |
 | Other Deye models (single-phase, HV) | Untested: registers may differ, a warning is logged |
 
@@ -42,8 +49,7 @@ Reports from other models are welcome, see [CONTRIBUTING](CONTRIBUTING.md).
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=csorbalazs306&repository=ha-deye-bluetooth&category=integration)
 
-Or add `https://github.com/csorbalazs306/ha-deye-bluetooth` as a custom repository of type
-*Integration*, download **Deye Bluetooth**, and restart Home Assistant.
+Or search for **Deye Bluetooth** in HACS, download it, and restart Home Assistant.
 
 ### Manually
 
@@ -55,7 +61,10 @@ The logger shows up under **Settings → Devices & services** once it is in rang
 **Add integration → Deye Bluetooth**.
 
 Rated power and device type come from the inverter. Everything else is on the options page (the
-integration's **Configure** button):
+integration's **Configure** button).
+
+<details>
+<summary><b>All options and their defaults</b></summary>
 
 | Section | Option | Default |
 |---|---|---|
@@ -74,6 +83,8 @@ integration's **Configure** button):
 | | Registers per read (longer reads are split) | 16 |
 | | Reply timeout, connect attempts | 10 s, 3 |
 | | Write and notify characteristic UUIDs | see [protocol](docs/protocol.md) |
+
+</details>
 
 The register map and the discovery UUID are in the code: the inverter cannot report the first, and Home Assistant
 needs the second in `manifest.json`. **Check the limits against your inverter and battery manual before allowing writes:
@@ -96,8 +107,12 @@ The first logger gets the prefix `deye`, the second `deye_2`, and so on.
 | `sensor.deye_inverter_<key>` | Every decoded register |
 | `number.`, `select.`, `time.`, `switch.deye_inverter_<key>` | The settings |
 
-Grid protection, battery chemistry and voltages stay out of the controls on purpose.
-Power limits follow the rated power the inverter reports.
+The controls cover every setting of the register map, grid protection and battery chemistry included. Bit-field registers
+(special functions, AC coupling, MPPT scanning) appear as raw numbers. Readings, identity and the inverter clock are not
+controls, and neither is the Modbus address, because a new one ends the link.
+
+Power limits follow the rated power the inverter reports, and the current, zero-export and low-SoC limits are on the
+options page. The other ranges only fit the register: they do not protect anything.
 
 ### Grid-charge switch
 
@@ -122,14 +137,39 @@ Grid Charge and program 1's flag are both set.
 
 With more than one logger, both also need `config_entry_id`.
 
-## ⚠️ Writing to the inverter
+## Writing to the inverter
 
-Writes change a device connected to mains and a battery. **A wrong value can stop the
-inverter, damage the battery, or break grid rules. You use this at your own risk.**
+> [!CAUTION]
+> **You use this at your own risk.** Writes change a device connected to mains and a battery, and there are no safety
+> checks: the integration writes whatever value you give it, inside the register's range. The authors accept no liability
+> for damage, injury, fines or lost warranty.
 
-Writes are off by default. When on, only changed registers are written (they live in EEPROM)
-and each one is read back; a mismatch is an error. `write_register` accepts **any** register,
-so only admin users can call it, and you should check the address against your model's map first.
+**What a wrong value can do:**
+
+- **Grid protection** (voltage and frequency limits, reconnection time, grid standard): the inverter may stay connected
+  to a faulty grid or feed a line that should be dead, which can endanger people working on it. It can also break your
+  grid operator's rules and void the certification your connection depends on.
+- **Battery settings** (chemistry, BMS type, absorption, float and equalization voltages, shutdown limits): the battery can
+  overcharge, deep-discharge or overheat, with a risk of permanent damage or fire.
+- **Limits and modes** (currents, export, generator, smart load, AC coupling, raw words): cables, breakers and connected
+  equipment can be overloaded, and the house can lose power.
+
+**What protects you, and what does not:**
+
+- Writes are off by default. Nothing is written until you turn on *Allow writes*.
+- Only changed registers are written, because they live in EEPROM. Each one is read back, and a mismatch is an error. This
+  confirms the inverter stored the value, not that the value is safe.
+- `write_register` is for admin users only. **The controls are not:** with *Allow writes* on, any Home Assistant user,
+  automation or dashboard that can change entities can change these settings too.
+- Registers and scales come from a published map of the 3-phase LV hybrids. On other models the same address can mean
+  something else.
+
+**Not tried on real hardware:** the settings added in 1.2.0, which are grid protection and grid standard, battery chemistry
+and voltages, generator, smart load, AC coupling, peak shaving and the raw words. Note the value before changing it, and
+check the result on your inverter's display.
+
+Check every value against your inverter and battery manuals and your grid operator's requirements. Changing grid protection
+may need a qualified electrician or your grid operator's approval.
 
 ## Troubleshooting
 

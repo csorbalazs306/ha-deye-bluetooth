@@ -173,7 +173,7 @@ VALUES: list[Value] = [
     Value("time_of_use", "Time of use", 146),
     *[Value(f"program_{i}_soc", f"Program {i} SoC", 165 + i, "%") for i in range(1, 7)],
     *[Value(f"program_{i}_charge", f"Program {i} charge", 171 + i) for i in range(1, 7)],
-    # the rest of the map, read-only: the addresses, scales and texts of ha-solarman's deye_p3
+    # the rest of the map: the addresses, scales and texts of ha-solarman's deye_p3
     # identity
     Value("device_type", "Device type", 0, options=DEVICES),
     Value("modbus_address", "Modbus address", 1),
@@ -279,26 +279,91 @@ VALUES: list[Value] = [
 ]
 BY_KEY = {v.key: v for v in VALUES}
 
-# what the device page can change.  Left out on purpose: grid protection and
-# grid standard, battery type and voltages, generator and AC coupling settings.
-# A limit is a number, RATED (what the inverter reports) or the name of an option (options.py).
+# what the device page can change: every setting of the map, with the dangerous ones.  Left out: readings,
+# identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
+# register, they do not protect anything.  A limit is a number, RATED (what the inverter reports) or the name
+# of an option (options.py).  A "word" is the raw register, bit fields included.
 RATED = None
-NUMBERS: dict[str, tuple[float | str, float | str | None, float | str]] = {  # key: (min, max, step)
-    "max_sell_power": (0, RATED, "power_step"),
+_BATTERY_V = (0, 100, 0.01)
+_SOC = (0, 100, 1)
+_WORD = (0, 0xFFFF, 1)
+_AMPS = (0, "battery_current_max", 1)
+_POWER = (0, RATED, "power_step")
+_HOURS = (0, 24, 0.1)
+NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] = {  # key: (min, max, step)
+    "max_sell_power": _POWER,
     "zero_export_power": (0, "zero_export_max", 1),
-    "battery_max_charge_current": (0, "battery_current_max", 1),
-    "battery_max_discharge_current": (0, "battery_current_max", 1),
-    "grid_charge_current": (0, "battery_current_max", 1),
-    "grid_charge_start_soc": (0, 100, 1),
+    "battery_max_charge_current": _AMPS,
+    "battery_max_discharge_current": _AMPS,
+    "grid_charge_current": _AMPS,
+    "grid_charge_start_soc": _SOC,
     "battery_low_soc": ("low_soc_min", 100, 1),
-    **{f"program_{i}_power": (0, RATED, "power_step") for i in range(1, 7)},
-    **{f"program_{i}_soc": (0, 100, 1) for i in range(1, 7)},
+    **{f"program_{i}_power": _POWER for i in range(1, 7)},
+    **{f"program_{i}_soc": _SOC for i in range(1, 7)},
+    **{f"program_{i}_voltage": _BATTERY_V for i in range(1, 7)},
+    # battery chemistry and voltages
+    "battery_capacity": (0, 0xFFFF, 1),
+    "battery_equalization_voltage": _BATTERY_V,
+    "battery_absorption_voltage": _BATTERY_V,
+    "battery_float_voltage": _BATTERY_V,
+    "battery_empty_voltage": _BATTERY_V,
+    "battery_shutdown_voltage": _BATTERY_V,
+    "battery_restart_voltage": _BATTERY_V,
+    "battery_low_voltage": _BATTERY_V,
+    "battery_equalization_cycle": (0, 365, 1),
+    "battery_equalization_time": (0, 24, 0.5),
+    "battery_temperature_compensation": (-100, 100, 1),
+    "battery_resistance": (0, 0xFFFF, 1),
+    "battery_charge_efficiency": (0, 100, 0.1),
+    "battery_shutdown_soc": _SOC,
+    "battery_restart_soc": _SOC,
+    "grid_charge_start_voltage": _BATTERY_V,
+    # generator and smart load
+    "generator_operating_time": _HOURS,
+    "generator_cooling_time": _HOURS,
+    "generator_charge_start_voltage": _BATTERY_V,
+    "generator_charge_start_soc": _SOC,
+    "generator_charge_current": _AMPS,
+    "generator_min_pv_power": _POWER,
+    "generator_peak_shaving_power": _POWER,
+    "smart_load_off_voltage": _BATTERY_V,
+    "smart_load_off_soc": _SOC,
+    "smart_load_on_voltage": _BATTERY_V,
+    "smart_load_on_soc": _SOC,
+    # grid protection and limits
+    "grid_protection_voltage_high": (0, 500, 0.1),
+    "grid_protection_voltage_low": (0, 500, 0.1),
+    "grid_protection_frequency_high": (0, 100, 0.01),
+    "grid_protection_frequency_low": (0, 100, 0.01),
+    "grid_reconnection_time": (0, 0xFFFF, 1),
+    "grid_peak_shaving_power": _POWER,
+    "grid_max_export_power": (0, 655350, 10),
+    "grid_max_import_power": (0, 655350, 10),
+    "pv_power_limit": (0, 0xFFFF, 1),
+    "self_check_time": (0, 0xFFFF, 1),
+    # raw words
+    "generator_charge": _WORD,
+    "generator_flag": _WORD,
+    "special_functions": _WORD,
+    "off_grid": _WORD,
+    "generator_grid_side": _WORD,
+    "ac_coupling": _WORD,
+    "export_asymmetry": _WORD,
+    "mppt_scanning": _WORD,
 }
 SELECTS: dict[str, dict[int, str]] = {
     "energy_pattern": ENERGY_PATTERNS,
     "work_mode": WORK_MODES,
     "time_of_use": {0: "disabled", 0xFF: "all week", 0x3F: "weekdays", 0xC1: "weekend"},
     **{f"program_{i}_charge": {0: "disabled", 1: "grid", 2: "generator", 3: "both"} for i in range(1, 7)},
+    "battery_control_mode": BATTERY_CONTROL,
+    "battery_operation_mode": BATTERY_OPERATION,
+    "bms_type": BMS_TYPES,
+    "io_mode": IO_MODES,
+    "grid_voltage_setting": GRID_VOLTAGES,
+    "grid_frequency_setting": GRID_FREQUENCIES,
+    "charging_signal": CHARGING_SIGNALS,
+    "self_check": ON_OFF,
 }
 TIMES = [f"program_{i}_time" for i in range(1, 7)]
 ON_OFF_SWITCHES = ["solar_sell"]
@@ -353,9 +418,10 @@ def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
 def encode_value(v: Value, value: float) -> int:
     """The register word of a number: the opposite of decode_value."""
     raw = round(value / v.scale) + v.offset
-    if not 0 <= raw <= 0xFFFF:
+    low, high = (-0x8000, 0x7FFF) if v.signed else (0, 0xFFFF)
+    if not low <= raw <= high:
         raise ValueError(f"{v.key}: {value} is register word {raw}")
-    return raw
+    return raw & 0xFFFF
 
 
 def decode_serial(regs: dict[int, int]) -> str | None:
