@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
+from functools import cached_property
 from math import inf
 from time import monotonic  # not "import time": this package's time.py would replace it
 
@@ -36,6 +37,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -104,6 +106,18 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     @property
     def writes_allowed(self) -> bool:
         return bool(self.option(o.WRITES))
+
+    @cached_property
+    def device_info(self) -> DeviceInfo:
+        """The device page of this logger: what the inverter says about itself."""
+        data = self.registers()
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.config_entry.unique_id)},
+            name=f"Deye inverter{self.prefix.removeprefix('deye').replace('_', ' ')}",
+            manufacturer="Deye",
+            model=r.device_model(data),
+            serial_number=r.decode_serial(data),
+        )
 
     async def _ensure_link(self) -> None:
         if self.link.connected:

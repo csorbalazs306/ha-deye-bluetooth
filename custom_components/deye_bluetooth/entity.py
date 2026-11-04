@@ -7,10 +7,9 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.const import EntityCategory
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN, DeyeCoordinator
+from . import DeyeCoordinator
 from . import registers as r
 
 POWER = (SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT)
@@ -94,17 +93,10 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
 
     def __init__(self, coordinator: DeyeCoordinator, key: str, entity_id: str) -> None:
         super().__init__(coordinator)
-        entry = coordinator.config_entry
         platform, object_id = entity_id.split(".")
         self.entity_id = f"{platform}.{coordinator.prefix}{object_id.removeprefix('deye')}"
-        self._attr_unique_id = f"{entry.unique_id}_{key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.unique_id)},
-            name=f"Deye inverter{coordinator.prefix.removeprefix('deye').replace('_', ' ')}",
-            manufacturer="Deye",
-            model=r.device_model(coordinator.registers()),
-            serial_number=r.decode_serial(coordinator.registers()),
-        )
+        self._attr_unique_id = f"{coordinator.config_entry.unique_id}_{key}"
+        self._attr_device_info = coordinator.device_info
 
     def _handle_coordinator_update(self) -> None:
         available = self.available
