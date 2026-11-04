@@ -49,7 +49,7 @@ for the refusal or the missing data.
 
 | File | What belongs there |
 |---|---|
-| `__init__.py` | the coordinator, the poll groups and the two service actions |
+| `__init__.py` | the coordinator and the two service actions |
 | `registers.py` | the register map: poll blocks, values, decoding, setting ranges |
 | `protocol.py` | Modbus RTU framing and the logger's AT console; no I/O, no Home Assistant |
 | `transport.py` | the GATT link: connect, notify, command, read, write |
