@@ -14,6 +14,7 @@ Kept free of Home Assistant imports so the tests run without it.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 # every live interval (1 s): the fast-moving grid and load values
@@ -380,10 +381,16 @@ def _signed(raw: int) -> int:
     return raw - 0x10000 if raw >= 0x8000 else raw
 
 
+def _words(regs: dict[int, int], addresses: Iterable[int]) -> list[int] | None:
+    """The words at these registers, None while one of them is missing."""
+    words = [regs.get(reg) for reg in addresses]
+    return None if any(w is None for w in words) else words
+
+
 def _decode_clock(regs: dict[int, int]) -> str | None:
     """Registers 62-64: year, month / day, hour / minute, second, one byte each."""
-    words = [regs.get(reg) for reg in (62, 63, 64)]
-    if any(w is None for w in words):
+    words = _words(regs, (62, 63, 64))
+    if words is None:
         return None
     a, b, c = words
     return f"20{a >> 8:02d}-{a & 0xFF:02d}-{b >> 8:02d} {b & 0xFF:02d}:{c >> 8:02d}:{c & 0xFF:02d}"
@@ -425,8 +432,8 @@ def encode_value(v: Value, value: float) -> int:
 
 
 def decode_serial(regs: dict[int, int]) -> str | None:
-    words = [regs.get(SERIAL_REG + i) for i in range(SERIAL_WORDS)]
-    if any(w is None for w in words):
+    words = _words(regs, range(SERIAL_REG, SERIAL_REG + SERIAL_WORDS))
+    if words is None:
         return None
     text = b"".join(w.to_bytes(2, "big") for w in words).decode("ascii", "replace")
     return text.strip("\x00 ") or None
@@ -437,8 +444,8 @@ FIRMWARE = {"main": (14, 15, 11), "hmi": (17, 18), "protocol": (2,)}
 
 
 def decode_firmware(regs: dict[int, int], part: str) -> str | None:
-    words = [regs.get(reg) for reg in FIRMWARE[part]]
-    return None if any(w is None for w in words) else "-".join(f"{w:04X}" for w in words)
+    words = _words(regs, FIRMWARE[part])
+    return None if words is None else "-".join(f"{w:04X}" for w in words)
 
 
 def rated_power(regs: dict[int, int]) -> float | None:
