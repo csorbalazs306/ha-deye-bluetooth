@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from functools import cached_property
 from math import inf
@@ -56,20 +58,18 @@ CONF_ENTRY = "config_entry_id"
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+_WORD = vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))
 WRITE_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
-        vol.Required("value"): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
-            vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))], vol.Length(min=1, max=16)),
-        ),
+        vol.Required("address"): _WORD,
+        vol.Required("value"): vol.Any(_WORD, vol.All(cv.ensure_list, [_WORD], vol.Length(min=1, max=16))),
     }
 )
 READ_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
+        vol.Required("address"): _WORD,
         vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=MODBUS_MAX_READ)),
     }
 )
@@ -127,6 +127,16 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
             raise LinkError(f"{self.address} not in range of a connectable Bluetooth adapter")
         await self.link.connect(device)
 
+    @asynccontextmanager
+    async def _linked(self, action: str) -> AsyncIterator[None]:
+        """A connected link for one action; a failure drops it and is a Home Assistant error."""
+        try:
+            await self._ensure_link()
+            yield
+        except LinkError as exc:
+            await self.link.close()
+            raise HomeAssistantError(f"Deye Bluetooth: {action} failed: {exc}") from exc
+
     async def _read_blocks(self, blocks: list[tuple[int, int]]) -> None:
         for start, count in blocks:
             try:
@@ -177,29 +187,19 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
 
     async def read(self, address: int, count: int) -> list[int]:
         """Any registers, on demand (the read_registers action: finding a value)."""
-        async with self.lock:
-            try:
-                await self._ensure_link()
-                return await self.link.read(address, count)
-            except LinkError as exc:
-                await self.link.close()
-                raise HomeAssistantError(f"Deye Bluetooth: read of {address} failed: {exc}") from exc
+        async with self.lock, self._linked(f"read of {address}"):
+            return await self.link.read(address, count)
 
     async def write(self, address: int, values: list[int]) -> None:
         """Write consecutive registers, each read back; unchanged ones are skipped."""
         if not self.writes_allowed:
             raise HomeAssistantError("Deye Bluetooth: writes are off (integration options → Allow writes)")
-        async with self.lock:
-            try:
-                await self._ensure_link()
-                current = await self.link.read(address, len(values))
-                for i, value in enumerate(values):
-                    if current[i] != value:
-                        await self._write_verified(address + i, value)
-                self._fast_at = self._slow_at = -inf  # read everything again on the next poll
-            except LinkError as exc:
-                await self.link.close()
-                raise HomeAssistantError(f"Deye Bluetooth: write to {address} failed: {exc}") from exc
+        async with self.lock, self._linked(f"write to {address}"):
+            current = await self.link.read(address, len(values))
+            for i, value in enumerate(values):
+                if current[i] != value:
+                    await self._write_verified(address + i, value)
+            self._fast_at = self._slow_at = -inf  # read everything again on the next poll
         _LOGGER.info("Deye Bluetooth: wrote %s to register %d", values, address)
         await self.async_request_refresh()
 
