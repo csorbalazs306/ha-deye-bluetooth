@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
@@ -24,6 +26,17 @@ class LinkError(Exception):
 
 class RegisterRejected(LinkError):
     """The inverter refused these registers; the link is fine."""
+
+
+@contextmanager
+def _protocol_errors() -> Iterator[None]:
+    """Map a protocol failure onto the link's own errors."""
+    try:
+        yield
+    except p.ModbusRejected as exc:
+        raise RegisterRejected(str(exc)) from exc
+    except p.ProtocolError as exc:
+        raise LinkError(str(exc)) from exc
 
 
 class Link:
@@ -109,17 +122,11 @@ class Link:
     async def _read(self, address: int, count: int) -> list[int]:
         frame = p.read_frame(address, count, self._slave, self._max_read)
         reply = await self._command(p.at_command(frame))
-        try:
+        with _protocol_errors():
             return p.parse_read(reply, count)
-        except p.ModbusRejected as exc:
-            raise RegisterRejected(str(exc)) from exc
-        except p.ProtocolError as exc:
-            raise LinkError(str(exc)) from exc
 
     async def write(self, address: int, value: int) -> None:
         frame = p.write_frame(address, value, self._slave)
         reply = await self._command(p.at_command(frame))
-        try:
+        with _protocol_errors():
             p.check_write_ack(reply, frame)
-        except p.ProtocolError as exc:
-            raise LinkError(str(exc)) from exc
