@@ -296,6 +296,9 @@ _WORD = (0, 0xFFFF, 1)
 _AMPS = (0, "battery_current_max", 1)
 _POWER = (0, RATED, "power_step")
 _HOURS = (0, 24, 0.1)
+_GRID_V = (0, 500, 0.1)
+_GRID_HZ = (0, 100, 0.01)
+_GRID_WATTS = (0, 655350, 10)
 NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] = {  # key: (min, max, step)
     "max_sell_power": _POWER,
     "zero_export_power": (0, "zero_export_max", 1),
@@ -308,7 +311,7 @@ NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] =
     **{f"program_{i}_soc": _SOC for i in range(1, 7)},
     **{f"program_{i}_voltage": _BATTERY_V for i in range(1, 7)},
     # battery chemistry and voltages
-    "battery_capacity": (0, 0xFFFF, 1),
+    "battery_capacity": _WORD,
     "battery_equalization_voltage": _BATTERY_V,
     "battery_absorption_voltage": _BATTERY_V,
     "battery_float_voltage": _BATTERY_V,
@@ -319,7 +322,7 @@ NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] =
     "battery_equalization_cycle": (0, 365, 1),
     "battery_equalization_time": (0, 24, 0.5),
     "battery_temperature_compensation": (-100, 100, 1),
-    "battery_resistance": (0, 0xFFFF, 1),
+    "battery_resistance": _WORD,
     "battery_charge_efficiency": (0, 100, 0.1),
     "battery_shutdown_soc": _SOC,
     "battery_restart_soc": _SOC,
@@ -337,16 +340,16 @@ NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] =
     "smart_load_on_voltage": _BATTERY_V,
     "smart_load_on_soc": _SOC,
     # grid protection and limits
-    "grid_protection_voltage_high": (0, 500, 0.1),
-    "grid_protection_voltage_low": (0, 500, 0.1),
-    "grid_protection_frequency_high": (0, 100, 0.01),
-    "grid_protection_frequency_low": (0, 100, 0.01),
-    "grid_reconnection_time": (0, 0xFFFF, 1),
+    "grid_protection_voltage_high": _GRID_V,
+    "grid_protection_voltage_low": _GRID_V,
+    "grid_protection_frequency_high": _GRID_HZ,
+    "grid_protection_frequency_low": _GRID_HZ,
+    "grid_reconnection_time": _WORD,
     "grid_peak_shaving_power": _POWER,
-    "grid_max_export_power": (0, 655350, 10),
-    "grid_max_import_power": (0, 655350, 10),
-    "pv_power_limit": (0, 0xFFFF, 1),
-    "self_check_time": (0, 0xFFFF, 1),
+    "grid_max_export_power": _GRID_WATTS,
+    "grid_max_import_power": _GRID_WATTS,
+    "pv_power_limit": _WORD,
+    "self_check_time": _WORD,
     # raw words
     "generator_charge": _WORD,
     "generator_flag": _WORD,

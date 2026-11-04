@@ -16,8 +16,16 @@ from custom_components.deye_bluetooth.diagnostics import async_get_config_entry_
 from custom_components.deye_bluetooth.transport import Link
 
 WRITE_UUID = "11111111-2222-3333-4444-555555555555"
+SERVICE_UUID = "00000922-0000-1000-8000-00805f9b34fb"
 ADDRESS, ADDRESS_2 = "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"
 SERIAL = {3: 12594, 4: 13108, 5: 13622, 6: 14136, 7: 14640}
+
+
+def _discovery(address: str, name: str) -> MagicMock:
+    """The Bluetooth discovery of one logger."""
+    info = MagicMock(address=address, service_uuids=[SERVICE_UUID])
+    info.name = name
+    return info
 
 
 class FakeLink:
@@ -270,8 +278,7 @@ async def test_diagnostics_leave_out_serial_and_address(hass: HomeAssistant) -> 
 
 async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) -> None:
     await _add(hass)
-    info = MagicMock(address=ADDRESS_2, service_uuids=["00000922-0000-1000-8000-00805f9b34fb"])
-    info.name = "logger2"
+    info = _discovery(ADDRESS_2, "logger2")
     with patch("custom_components.deye_bluetooth.config_flow.async_discovered_service_info", return_value=[info]):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
         assert result["type"] is FlowResultType.FORM
@@ -281,8 +288,7 @@ async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) 
 
 
 async def test_flow_by_hand_while_a_discovery_of_the_logger_waits(hass: HomeAssistant) -> None:
-    info = MagicMock(address=ADDRESS, service_uuids=["00000922-0000-1000-8000-00805f9b34fb"])
-    info.name = "logger"
+    info = _discovery(ADDRESS, "logger")
     discovery = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "bluetooth"}, data=info)
     assert discovery["type"] is FlowResultType.FORM
     with patch("custom_components.deye_bluetooth.config_flow.async_discovered_service_info", return_value=[info]):

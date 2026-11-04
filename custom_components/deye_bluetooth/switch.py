@@ -29,7 +29,20 @@ async def async_setup_entry(
     async_add_entities([GridChargeSwitch(coordinator), *(SettingSwitch(coordinator, k) for k in r.ON_OFF_SWITCHES)])
 
 
-class GridChargeSwitch(DeyeEntity, SwitchEntity):
+class _ToggleSwitch(SwitchEntity):
+    """A switch whose two services go through one write."""
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
+
+    async def _set(self, on: bool) -> None:
+        raise NotImplementedError
+
+
+class GridChargeSwitch(DeyeEntity, _ToggleSwitch):
     _attr_name = "Grid charge"
     _attr_icon = "mdi:transmission-tower-import"
 
@@ -44,12 +57,6 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
     def is_on(self) -> bool:
         return bool(self.regs.get(r.REG_GRID_CHARGE)) and bool(self.regs.get(r.PROGRAM_CHARGE, 0) & GRID_FLAG)
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._set(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._set(False)
-
     async def _set(self, on: bool) -> None:
         flags = [
             (w | GRID_FLAG) if on else (w & ~GRID_FLAG)
@@ -59,16 +66,13 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
         await self.coordinator.write(r.REG_GRID_CHARGE, [1 if on else 0])
 
 
-class SettingSwitch(ControlEntity, SwitchEntity):
+class SettingSwitch(ControlEntity, _ToggleSwitch):
     def __init__(self, coordinator: DeyeCoordinator, key: str) -> None:
         super().__init__(coordinator, key, "switch")
 
     @property
     def is_on(self) -> bool:
-        return bool(self.regs.get(self._value.reg))
+        return bool(self.raw)
 
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._write(1)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._write(0)
+    async def _set(self, on: bool) -> None:
+        await self._write(1 if on else 0)
