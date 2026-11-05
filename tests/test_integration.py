@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, section
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
+from homeassistant.helpers import selector
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -192,29 +193,52 @@ async def _options(hass: HomeAssistant, entry: MockConfigEntry, **changes):
 async def test_the_options_change_what_the_code_does(hass: HomeAssistant) -> None:
     entry = await _add(hass, writes=True)
     result = await _options(
-        hass, entry, battery_current_max=100, zero_export_max=50, power_step=10, low_soc_min=20, grid_min_voltage=300,
-        modbus_slave=2, max_read=8, reply_timeout=5, connect_attempts=2, write_characteristic=WRITE_UUID,
-        settings_interval=600,
+        hass, entry, modbus_slave=2, max_read=8, reply_timeout=5, connect_attempts=2,
+        write_characteristic=WRITE_UUID, settings_interval=600,
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
-    assert entry.options["battery_current_max"] == 100  # flat in the entry
+    assert entry.options["settings_interval"] == 600  # flat in the entry
     assert entry.state is ConfigEntryState.LOADED
 
-    number = hass.states.get("number.deye_inverter_battery_max_charge_current").attributes
-    assert number["max"] == 100
-    assert hass.states.get("number.deye_inverter_zero_export_power").attributes["max"] == 50
-    assert hass.states.get("number.deye_inverter_max_sell_power").attributes["step"] == 10
-    assert hass.states.get("number.deye_inverter_battery_low_soc").attributes["min"] == 20
+    # the inverter's own settings keep the register's range, not an option of the link
+    assert hass.states.get("number.deye_inverter_battery_low_soc").attributes["min"] == 0
+    assert hass.states.get("number.deye_inverter_battery_max_charge_current").attributes["max"] == 2000
+    assert hass.states.get("number.deye_inverter_zero_export_power").attributes["max"] == 10000
+    assert hass.states.get("number.deye_inverter_max_sell_power").attributes["step"] == 100
     assert entry.runtime_data.link.settings == {
         "slave": 2, "max_read": 8, "write_char": WRITE_UUID, "notify_char": p.NOTIFY_CHAR,
         "reply_timeout": 5, "connect_attempts": 2,
     }
-    entry.runtime_data.link.regs[552] = 0  # relay open, 230 V is now under the option's 300 V
+    entry.runtime_data.link.regs[552] = 0  # relay open, but 230 V is still grid present
     entry.runtime_data._fast_at = float("-inf")
     await entry.runtime_data.async_refresh()
     await hass.async_block_till_done()
-    assert hass.states.get("binary_sensor.deye_grid").state == "off"
+    assert hass.states.get("binary_sensor.deye_grid").state == "on"
+
+
+async def test_a_low_soc_below_ten_can_be_set(hass: HomeAssistant) -> None:
+    """The inverter can report 5 %: no option may clamp the register below its range."""
+    entry = await _add(hass, writes=True)
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": "number.deye_inverter_battery_low_soc", "value": 5}, blocking=True
+    )
+    assert entry.runtime_data.link.writes == [(117, 5)]
+
+
+async def test_every_numeric_option_is_an_input_box(hass: HomeAssistant) -> None:
+    entry = await _add(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    boxes = [
+        validator
+        for group in result["data_schema"].schema.values()
+        if isinstance(group, section)
+        for validator in group.schema.schema.values()
+        if isinstance(validator, selector.NumberSelector)
+    ]
+    assert len(boxes) == len([option for option in o.OPTIONS if option.low is not None])
+    assert all(box.config["mode"] == selector.NumberSelectorMode.BOX for box in boxes)
 
 
 async def test_the_options_page_refuses_bad_values(hass: HomeAssistant) -> None:

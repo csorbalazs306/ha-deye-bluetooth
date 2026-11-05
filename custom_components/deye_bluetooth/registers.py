@@ -77,6 +77,7 @@ BMS_TYPES = {
 STATES = {0: "standby", 1: "self-test", 2: "normal", 3: "alarm", 4: "fault"}
 WORK_MODES = {0: "selling first", 1: "zero export to load", 2: "zero export to CT"}
 GRID_RELAY_BIT = 0x04  # 552: bit 2 = the grid relay is closed
+GRID_PRESENT_MIN_V = 100  # an open relay with a phase at this voltage is still grid present
 
 
 @dataclass(frozen=True)
@@ -281,23 +282,23 @@ BY_KEY = {v.key: v for v in VALUES}
 
 # what the device page can change: every setting of the map, with the dangerous ones.  Left out: readings,
 # identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
-# register, they do not protect anything.  A limit is a number, RATED (what the inverter reports) or the name
-# of an option (options.py).  A "word" is the raw register, bit fields included.
+# register, they do not protect anything.  A limit is a number or RATED (what the inverter reports).
+# A "word" is the raw register, bit fields included.
 RATED = None
 _BATTERY_V = (0, 100, 0.01)
 _SOC = (0, 100, 1)
 _WORD = (0, 0xFFFF, 1)
-_AMPS = (0, "battery_current_max", 1)
-_POWER = (0, RATED, "power_step")
+_AMPS = (0, 2000, 1)
+_POWER = (0, RATED, 100)
 _HOURS = (0, 24, 0.1)
-NUMBERS: dict[str, tuple[float | str | None, float | str | None, float | str]] = {  # key: (min, max, step)
+NUMBERS: dict[str, tuple[float | None, float | None, float]] = {  # key: (min, max, step)
     "max_sell_power": _POWER,
-    "zero_export_power": (0, "zero_export_max", 1),
+    "zero_export_power": (0, 10000, 1),
     "battery_max_charge_current": _AMPS,
     "battery_max_discharge_current": _AMPS,
     "grid_charge_current": _AMPS,
     "grid_charge_start_soc": _SOC,
-    "battery_low_soc": ("low_soc_min", 100, 1),
+    "battery_low_soc": _SOC,
     **{f"program_{i}_power": _POWER for i in range(1, 7)},
     **{f"program_{i}_soc": _SOC for i in range(1, 7)},
     **{f"program_{i}_voltage": _BATTERY_V for i in range(1, 7)},

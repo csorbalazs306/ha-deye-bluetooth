@@ -1,8 +1,10 @@
-"""Everything the options page sets, with its default and its range.
+"""What the options page sets, with its default and its range.
 
-What the inverter reports itself (rated power, device type) is read from it and
-has no option.  What is a fact of the protocol (the register map, the
-service UUID of manifest.json) stays in the code.
+Only what the link and the polling need.  The inverter's own settings are
+controls on the device page (its Configuration section), read from its
+registers.  What the inverter reports itself (rated power, device type) is read
+from it and has no option.  What is a fact of the protocol (the register map,
+the service UUID of manifest.json) stays in the code.
 """
 from __future__ import annotations
 
@@ -10,8 +12,8 @@ from dataclasses import dataclass
 
 from . import protocol as p
 
-POLLING, CONTROL, LIMITS, LINK = "polling", "control", "limits", "link"
-SECTIONS = {POLLING: False, CONTROL: False, LIMITS: True, LINK: True}  # section: collapsed
+POLLING, CONTROL, LINK = "polling", "control", "link"
+SECTIONS = {POLLING: False, CONTROL: False, LINK: True}  # section: collapsed
 
 LIVE_S = "live_interval"
 SCAN_S = "scan_interval"
@@ -20,11 +22,6 @@ STALE_S = "stale_after"
 SETTINGS_STALE_S = "settings_stale_after"
 WRITES = "allow_writes"
 WRITE_ATTEMPTS = "write_attempts"
-GRID_MIN_V = "grid_min_voltage"
-CURRENT_MAX = "battery_current_max"
-ZERO_EXPORT_MAX = "zero_export_max"
-POWER_STEP = "power_step"
-LOW_SOC_MIN = "low_soc_min"
 SLAVE = "modbus_slave"
 MAX_READ = "max_read"
 REPLY_TIMEOUT = "reply_timeout"
@@ -50,11 +47,6 @@ OPTIONS = (
     Option(SETTINGS_STALE_S, POLLING, 900, 60, 86400),
     Option(WRITES, CONTROL, False),
     Option(WRITE_ATTEMPTS, CONTROL, 3, 1, 10),
-    Option(GRID_MIN_V, LIMITS, 100, 0, 500),
-    Option(CURRENT_MAX, LIMITS, 350, 1, 2000),
-    Option(ZERO_EXPORT_MAX, LIMITS, 500, 1, 10000),
-    Option(POWER_STEP, LIMITS, 100, 1, 1000),
-    Option(LOW_SOC_MIN, LIMITS, 10, 0, 100),
     Option(SLAVE, LINK, p.SLAVE, 1, 247),
     Option(MAX_READ, LINK, p.MAX_READ, 1, p.MODBUS_MAX_READ),
     Option(REPLY_TIMEOUT, LINK, 10, 1, 60),

@@ -6,6 +6,11 @@
   generator, smart load, AC coupling and peak shaving. **These write without safety checks, once *Allow writes* is on, and
   most are not tried on real hardware.** Read the extended disclaimer in the README.
 - Signed settings accept negative values (battery temperature compensation).
+- The options page keeps only polling, write safety and the Bluetooth link. The inverter/battery limits (maximum
+  battery current, maximum zero export power, power step, lowest allowed low SoC, grid present above) are gone: every
+  inverter setting is a control under **Configuration** on the device page. The number entities now use the register's
+  range, so a low SoC below 10 % is accepted again (0–100 %).
+- Every numeric option is an input box, not a slider.
 - README: tidier page, HACS default install.
 
 ## 1.1.0

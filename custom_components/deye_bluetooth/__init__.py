@@ -14,8 +14,9 @@ Entities (the prefix is ``deye`` for the first logger, ``deye_2`` for the second
 
 The grid phases and the load are read every second (live_interval: the logger
 answers in ~0.3 s and the values change about every second), everything else
-every 15 s, the settings every 5 min (all on the options page, like every limit
-the inverter does not report itself: options.py).
+every 15 s, the settings every 5 min.  Only the intervals, write safety and the
+Bluetooth link are on the options page (options.py); the inverter's own settings
+are controls on the device page.
 
 Writes (the controls, the admin-only ``deye_bluetooth.write_register`` action) are
 off until the "Allow writes" option is on; each written register is read back and a

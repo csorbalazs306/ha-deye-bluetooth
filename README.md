@@ -60,8 +60,9 @@ Copy `custom_components/deye_bluetooth` into your `config/custom_components` fol
 The logger shows up under **Settings → Devices & services** once it is in range. Otherwise use
 **Add integration → Deye Bluetooth**.
 
-Rated power and device type come from the inverter. Everything else is on the options page (the
-integration's **Configure** button).
+Rated power and device type come from the inverter. Polling, write safety and the Bluetooth link are on the
+options page (the integration's **Configure** button); every inverter and battery setting is a control under
+**Configuration** on the device page.
 
 <details>
 <summary><b>All options and their defaults</b></summary>
@@ -74,11 +75,6 @@ integration's **Configure** button).
 | | Values / settings go unavailable after | 120 s / 900 s |
 | Writing | Allow writes | off |
 | | Write attempts | 3 |
-| Limits | Maximum battery current | 350 A |
-| | Maximum zero export power | 500 W |
-| | Power step | 100 W |
-| | Lowest allowed low SoC | 10 % |
-| | Grid present above (with the relay open) | 100 V |
 | Bluetooth link | Modbus address | 1 |
 | | Registers per read (longer reads are split) | 16 |
 | | Reply timeout, connect attempts | 10 s, 3 |
@@ -87,8 +83,8 @@ integration's **Configure** button).
 </details>
 
 The register map and the discovery UUID are in the code: the inverter cannot report the first, and Home Assistant
-needs the second in `manifest.json`. **Check the limits against your inverter and battery manual before allowing writes:
-the defaults fit the verified model.**
+needs the second in `manifest.json`. **Check each setting against your inverter and battery manual before allowing
+writes: the register ranges only fit the register, they do not protect anything.**
 
 ## Entities
 
@@ -111,8 +107,8 @@ The controls cover every setting of the register map, grid protection and batter
 (special functions, AC coupling, MPPT scanning) appear as raw numbers. Readings, identity and the inverter clock are not
 controls, and neither is the Modbus address, because a new one ends the link.
 
-Power limits follow the rated power the inverter reports, and the current, zero-export and low-SoC limits are on the
-options page. The other ranges only fit the register: they do not protect anything.
+Power limits follow the rated power the inverter reports. All the other ranges only fit the register: they do not
+protect anything.
 
 ### Grid-charge switch
 

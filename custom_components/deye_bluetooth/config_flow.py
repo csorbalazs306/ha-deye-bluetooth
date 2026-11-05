@@ -10,6 +10,7 @@ from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
+from homeassistant.helpers import selector
 
 from . import CONF_ADDRESS, CONF_PREFIX, DOMAIN
 from . import options as o
@@ -64,9 +65,22 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
 
+class _IntBox(selector.NumberSelector):
+    """A number input box, never a slider, that stores an int."""
+
+    def __call__(self, data: Any) -> int:
+        return int(super().__call__(data))
+
+
 def _validator(option: o.Option):
     if option.low is not None:
-        return vol.All(vol.Coerce(int), vol.Range(min=option.low, max=option.high))
+        # plain vol.Range serialises to a number selector with min+max, whose
+        # default mode is "slider"; an explicit box keeps every field editable
+        return _IntBox(
+            selector.NumberSelectorConfig(
+                min=option.low, max=option.high, step=1, mode=selector.NumberSelectorMode.BOX
+            )
+        )
     return bool if isinstance(option.default, bool) else str
 
 

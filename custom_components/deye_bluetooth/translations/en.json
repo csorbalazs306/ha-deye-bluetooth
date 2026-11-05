@@ -50,20 +50,6 @@
               "allow_writes": "Off: read-only. On: every setting can be changed, including grid protection and battery voltages, with no safety checks. Wrong values can damage equipment or break grid rules. Every write is read back; only changed registers are written."
             }
           },
-          "limits": {
-            "name": "Limits",
-            "description": "Rated power comes from the inverter. These it does not report: check your inverter and battery manual.",
-            "data": {
-              "battery_current_max": "Maximum battery current (A)",
-              "zero_export_max": "Maximum zero export power (W)",
-              "power_step": "Power step (W)",
-              "low_soc_min": "Lowest allowed low SoC (%)",
-              "grid_min_voltage": "Grid present above (V)"
-            },
-            "data_description": {
-              "grid_min_voltage": "With the grid relay open, a phase at this voltage still counts as grid present."
-            }
-          },
           "link": {
             "name": "Bluetooth link (advanced)",
             "description": "Leave these alone unless your logger differs. Wrong values stop the connection.",

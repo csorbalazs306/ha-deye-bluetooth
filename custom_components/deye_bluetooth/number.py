@@ -25,10 +25,10 @@ class SettingNumber(ControlEntity, NumberEntity):
         self._limits = limits
         self._attr_native_unit_of_measurement = self._value.unit
 
-    def _limit(self, limit: float | str | None) -> float:
+    def _limit(self, limit: float | None) -> float:
         if limit is r.RATED:
             return r.rated_power(self.regs) or 0
-        return self.coordinator.option(limit) if isinstance(limit, str) else limit
+        return limit
 
     @property
     def native_min_value(self) -> float:
