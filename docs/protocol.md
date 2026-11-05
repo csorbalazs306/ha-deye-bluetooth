@@ -17,6 +17,8 @@ Frames are hex, slave 1, CRC-16/Modbus low byte first.
 - The logger takes one central at a time and stops advertising while connected.
 - Reads of more than 16 registers go unanswered and drop the link.
 - One command takes about 0.3 s.
+- If a logger lacks the configured write or notify characteristic, the integration tries each write and notify pair
+  it has until one answers the handshake. The service UUID stays fixed: discovery needs it before any connection.
 
 The register map follows the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
 [ha-solarman](https://github.com/davidrapan/ha-solarman) `deye_p3` profile).

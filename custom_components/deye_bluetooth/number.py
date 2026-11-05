@@ -25,9 +25,9 @@ class SettingNumber(ControlEntity, NumberEntity):
         self._limits = limits
         self._attr_native_unit_of_measurement = self._value.unit
 
-    def _limit(self, limit: float | None) -> float:
+    def _limit(self, limit: float | r._RatedPower) -> float:
         if limit is r.RATED:
-            return r.rated_power(self.regs) or 0
+            return r.rated_power(self.regs) or r.DEFAULT_RATED_W
         return limit
 
     @property

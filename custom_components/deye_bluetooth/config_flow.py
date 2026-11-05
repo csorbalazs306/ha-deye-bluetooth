@@ -19,7 +19,7 @@ SERVICE_UUID = "00000922-0000-1000-8000-00805f9b34fb"
 
 
 class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._found: dict[str, str] = {}  # address -> name
@@ -69,11 +69,14 @@ class _IntBox(selector.NumberSelector):
     """A number input box, never a slider, that stores an int."""
 
     def __call__(self, data: Any) -> int:
-        return int(super().__call__(data))
+        value = super().__call__(data)  # float, already checked against min/max
+        if not value.is_integer():
+            raise vol.Invalid("must be a whole number")
+        return int(value)
 
 
 def _validator(option: o.Option):
-    if option.low is not None:
+    if option.low is not None and option.high is not None:
         # plain vol.Range serialises to a number selector with min+max, whose
         # default mode is "slider"; an explicit box keeps every field editable
         return _IntBox(
@@ -103,10 +106,14 @@ def _schema(current: Mapping[str, Any]) -> vol.Schema:
 
 
 def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
-    if not all(_UUID.fullmatch(flat[key]) for key in (o.WRITE_CHAR, o.NOTIFY_CHAR)):
+    chars = (flat.get(o.WRITE_CHAR), flat.get(o.NOTIFY_CHAR))
+    if not all(isinstance(char, str) and _UUID.fullmatch(char) for char in chars):
         return {"base": "bad_uuid"}
-    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
-        return {"base": "stale_too_short"}  # values would go unavailable between two polls
+    try:
+        if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
+            return {"base": "stale_too_short"}  # values would go unavailable between two polls
+    except (KeyError, TypeError):
+        return {"base": "stale_too_short"}
     return {}
 
 

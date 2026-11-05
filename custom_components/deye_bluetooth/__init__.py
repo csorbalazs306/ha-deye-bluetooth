@@ -99,8 +99,8 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.last_error = ""
 
     def option(self, key: str):
-        """What the options page says, or its default."""
-        return self.config_entry.options.get(key, o.DEFAULTS[key])
+        """What the options page says, or its default (stale keys keep their value)."""
+        return self.config_entry.options[key] if key in self.config_entry.options else o.DEFAULTS[key]
 
     @property
     def writes_allowed(self) -> bool:
@@ -224,6 +224,14 @@ def _coordinator(hass: HomeAssistant, call: ServiceCall) -> DeyeCoordinator:
     if len(entries) > 1:
         raise ServiceValidationError(f"Deye Bluetooth: several loggers, set {CONF_ENTRY}")
     return entries[0].runtime_data
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """1.2.0 moved the inverter/battery limits to the device page: drop their stale keys."""
+    if entry.version < 2:
+        options = {key: value for key, value in entry.options.items() if key in o.DEFAULTS}
+        hass.config_entries.async_update_entry(entry, options=options, version=2)
+    return True
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

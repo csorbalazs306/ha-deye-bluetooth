@@ -154,5 +154,127 @@ class RegistersTest(unittest.TestCase):
         self.assertIn(regs[r.DEVICE_TYPE_REG], r.VERIFIED_DEVICE_TYPES)
 
 
+    # --- behavioural coverage added by the review loops ----------------------
+    def test_crc16_known_vectors(self):
+        self.assertEqual(p.crc16(b"123456789"), bytes.fromhex("374B"))
+        self.assertEqual(p.crc16(b""), bytes.fromhex("FFFF"))
+        self.assertEqual(p.crc16(bytes.fromhex("010300020001")), bytes.fromhex("25CA"))
+        self.assertEqual(p.crc16(b"123456789")[::-1], (0x4B37).to_bytes(2, "big"))
+
+    def test_parse_read_multiple_registers(self):
+        body = bytes((1, p.READ, 4)) + (0x1234).to_bytes(2, "big") + (0xABCD).to_bytes(2, "big")
+        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 2), [0x1234, 0xABCD])
+        words = list(range(16))
+        body = bytes((1, p.READ, 32)) + b"".join(w.to_bytes(2, "big") for w in words)
+        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 16), words)
+
+    def test_reply_error_validation(self):
+        bad_bodies = (
+            bytes((1, 0x10, 2, 0, 1)),          # wrong function
+            bytes((1, p.READ, 4, 0, 1, 0, 2)),  # wrong byte count
+            bytes((1, p.READ, 2, 0, 1, 0, 2)),  # wrong length
+        )
+        for body in bad_bodies:
+            reply = "+ok=" + (body + p.crc16(body)).hex()
+            with self.assertRaisesRegex(p.ProtocolError, "not a read of"):
+                p.parse_read(reply, 1)
+        with self.assertRaises(p.ProtocolError):
+            p.parse_read("+ok=0103", 1)
+        ack = bytes((1, p.READ, 0, 1, 0, 1))
+        with self.assertRaises(p.ProtocolError):
+            p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex(), p.write_frame(1, 1))
+        exc = bytes((1, 0x83, 0x02))
+        with self.assertRaisesRegex(p.ModbusRejected, "function 0x03"):
+            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+        self.assertFalse(p.is_handshake("+ok=21521,21521,9"))
+
+    def test_frame_validation_and_overrides(self):
+        with self.assertRaises(ValueError):
+            p.read_frame(0, 0)
+        with self.assertRaises(ValueError):
+            p.write_frame(0, -1)
+        with self.assertRaises(ValueError):
+            p.write_frame(0, 0x10000)
+        self.assertEqual(p.write_frame(0, 0xFFFF)[-4:-2], b"\xFF\xFF")
+        self.assertEqual(p.read_frame(2, 1, slave=5)[0], 5)
+        p.read_frame(0, 17, max_read=32)
+        with self.assertRaises(ValueError):
+            p.read_frame(0, 9, max_read=8)
+
+    def test_two_word_value_needs_both_words(self):
+        self.assertIsNone(r.decode_value(r.BY_KEY["total_import"], {522: 402}))
+        self.assertIsNone(r.decode_value(r.BY_KEY["rated_power"], {20: 50000}))
+        self.assertEqual(r.decode_value(r.BY_KEY["total_import"], {522: 402, 523: 0}), 40.2)
+        alarm = r.decode_value(r.BY_KEY["device_alarm"], {553: 0x86A0, 554: 1})
+        self.assertEqual(alarm, 100000)
+        self.assertIsInstance(alarm, int)
+        self.assertEqual(r.decode_value(r.BY_KEY["fault_1"], {555: 0xFFFF, 556: 0xFFFF}), 0xFFFFFFFF)
+
+    def test_encoding_enforces_the_register_word_range(self):
+        soc = r.BY_KEY["program_1_soc"]
+        comp = r.BY_KEY["battery_temperature_compensation"]
+        with self.assertRaises(ValueError):
+            r.encode_value(soc, 65536)
+        self.assertEqual(r.encode_value(soc, 65535), 0xFFFF)
+        for bad in (-32769, 32768):
+            with self.assertRaises(ValueError):
+                r.encode_value(comp, bad)
+        self.assertEqual(r.encode_value(comp, -32768), 0x8000)
+        self.assertEqual(r.encode_value(comp, 32767), 0x7FFF)
+        self.assertEqual(r.decode_value(comp, {comp.reg: 0x8000}), -32768)
+
+    def test_unusual_scales_and_text_formats(self):
+        self.assertEqual(r.decode_value(r.BY_KEY["grid_max_export_power"], {231: 1000}), 10000.0)
+        self.assertEqual(r.encode_value(r.BY_KEY["grid_max_export_power"], 10000), 1000)
+        self.assertEqual(r.decode_value(r.BY_KEY["battery_equalization_time"], {106: 3}), 1.5)
+        self.assertEqual(r.encode_value(r.BY_KEY["battery_equalization_time"], 1.5), 3)
+        self.assertEqual(r.decode_value(r.BY_KEY["program_1_time"], {148: 5}), "00:05")
+        self.assertEqual(r.decode_value(r.BY_KEY["program_1_time"], {148: 930}), "09:30")
+        self.assertEqual(r.decode_value(r.BY_KEY["afci_version"], {12: 0x000C}), "000C")
+        self.assertEqual(r.decode_value(r.BY_KEY["mcu_version"], {13: 0xFFFF}), "FFFF")
+        self.assertIsNone(r.decode_value(r.BY_KEY["afci_version"], {}))
+
+    def test_number_limits_are_numbers_not_option_names(self):
+        self.assertIsNotNone(r.RATED)  # opaque sentinel: None is never a valid limit
+        for key, (low, high, step) in r.NUMBERS.items():
+            self.assertIsInstance(low, (int, float), key)
+            self.assertIsInstance(step, (int, float), key)
+            self.assertTrue(high is r.RATED or isinstance(high, (int, float)), key)
+            self.assertNotIsInstance(low, str, key)
+            self.assertIsNot(low, r.RATED, key)
+            self.assertIsNot(step, r.RATED, key)
+            self.assertGreater(step, 0, key)
+            if high is r.RATED:
+                self.assertGreaterEqual(low, 0, key)
+            else:
+                self.assertLess(low, high, key)
+
+    def test_fixed_ranges_and_grid_threshold(self):
+        self.assertEqual(r.GRID_PRESENT_MIN_V, 100)
+        self.assertEqual(r.GRID_RELAY_BIT, 0x04)
+        self.assertEqual(r.NUMBERS["battery_low_soc"], (0, 100, 1))
+        self.assertEqual(r.NUMBERS["zero_export_power"], (0, 10000, 1))
+        self.assertEqual(r.NUMBERS["battery_max_charge_current"], (0, 2000, 1))
+        self.assertEqual(r.NUMBERS["max_sell_power"], (0, r.RATED, 100))
+        self.assertEqual(r.DEFAULT_RATED_W, 20000)
+
+    def test_select_options_are_non_empty_int_to_str_maps(self):
+        for key, opts in r.SELECTS.items():
+            self.assertIsInstance(opts, dict, key)
+            self.assertGreater(len(opts), 0, key)
+            for raw, label in opts.items():
+                self.assertIsInstance(raw, int, key)
+                self.assertIsInstance(label, str, key)
+            self.assertEqual(len(set(opts.values())), len(opts), key)
+
+    def test_all_control_keys_resolve_to_single_register_values(self):
+        keys = [*r.NUMBERS, *r.SELECTS, *r.TIMES, *r.ON_OFF_SWITCHES]
+        self.assertEqual(set(keys) - set(r.BY_KEY), set())
+        for key in r.TIMES:
+            self.assertEqual(r.BY_KEY[key].fmt, "time", key)
+        self.assertEqual(r.TIMES, [f"program_{i}_time" for i in range(1, 7)])
+        self.assertEqual(r.ON_OFF_SWITCHES, ["solar_sell"])
+
+
 if __name__ == "__main__":
     unittest.main()
