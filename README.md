@@ -17,7 +17,7 @@ This is an independent project, not made by or affiliated with Deye.
 
 ## Features
 
-- **Live data**: grid phases and load every second, everything else every 15 s (configurable).
+- **Live data**: grid currents, powers and load every second, grid voltages and everything else every 15 s (configurable).
 - **Every decoded register** as a sensor: PV, battery, BMS, grid, inverter, generator, energy counters, faults.
 - **Every setting on the device page**: Time-of-Use programs, work mode, charge limits, solar sell, battery voltages and
   chemistry, generator, grid protection.
@@ -72,7 +72,7 @@ options page (the integration's **Configure** button); every inverter and batter
 
 | Section | Option | Default |
 |---|---|---|
-| Polling | Live interval (grid phases and load, each change is a recorder row) | 1 s |
+| Polling | Live interval (grid currents and powers, load; each change is a recorder row) | 1 s |
 | | Poll interval (everything else) | 15 s |
 | | Settings interval | 300 s |
 | | Values / settings go unavailable after | 120 s / 900 s |
@@ -81,7 +81,7 @@ options page (the integration's **Configure** button); every inverter and batter
 | Bluetooth link | Modbus address | 1 |
 | | Registers per read (longer reads are split) | 16 |
 | | Reply timeout, connect attempts | 10 s, 3 |
-| | Write and notify characteristic UUIDs | see [protocol](docs/protocol.md) |
+| | Write and notify characteristic UUIDs | see [protocol](docs/protocol.md); if the logger has other ones, the pair that answers is found and saved here |
 
 </details>
 
@@ -103,7 +103,7 @@ The first logger gets the prefix `deye`, the second `deye_2`, and so on.
 | `sensor.deye_{grid_import,grid_export,load,pv}_energy` | Totals (kWh), for the Energy dashboard |
 | `binary_sensor.deye_grid` | The grid is present: the relay is closed, or a phase is at least 100 V (fixed) |
 | `switch.deye_grid_charge` | Battery charges from the grid, see [below](#grid-charge-switch) |
-| `sensor.deye_inverter_<key>` | Every decoded register |
+| `sensor.deye_inverter_<key>` | Every decoded register. The ones that repeat a setting or a summary sensor above are **disabled by default**, e.g. `sensor.deye_inverter_grid_power_l1` or `sensor.deye_inverter_work_mode`: they show the same register again. To use one, open the device page, choose *show disabled entities* and enable it |
 | `number.`, `select.`, `time.`, `switch.deye_inverter_<key>` | The settings |
 
 The controls cover every setting of the register map, grid protection and battery chemistry included. Bit-field registers
@@ -175,7 +175,11 @@ may need a qualified electrician or your grid operator's approval.
 ## Troubleshooting
 
 - **Not discovered**: close the Deye app, and check that the adapter sees the logger under the Bluetooth integration.
-- **Keeps dropping**: move the adapter or a proxy closer. Weak signal is the usual cause.
+- **Keeps dropping**: move the adapter or a proxy closer. Weak signal is the usual cause. After a failed connection the
+  polls wait 2, 4, 8 … up to 60 s before they connect again; a logger that is out of range is looked for at every poll.
+  Reads and writes from the actions do not wait.
+- **A register is refused**: the inverter answered with a Modbus exception. The action fails with that message and the
+  link stays up; the values of that block age out as usual.
 - **Grid-charge switch fails**: turn on *Allow writes*.
 - **Debug logs**: add `custom_components.deye_bluetooth: debug` under `logger:`.
 - **Reporting**: attach the device's diagnostics. They leave out the serial number and Bluetooth address.

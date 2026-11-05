@@ -18,7 +18,10 @@ Frames are hex, slave 1, CRC-16/Modbus low byte first.
 - Reads of more than 16 registers go unanswered and drop the link.
 - One command takes about 0.3 s.
 - If a logger lacks the configured write or notify characteristic, the integration tries each write and notify pair
-  it has until one answers the handshake. The service UUID stays fixed: discovery needs it before any connection.
+  it has until one answers the handshake, each for at most 2 s. The pair that answers is saved in the entry's options,
+  so the search runs once. The service UUID stays fixed: discovery needs it before any connection.
+- A Modbus exception reply (the inverter refuses a register) is an answer: the link stays up. Only a missing or
+  garbled reply is a link error, which drops the link.
 
 The register map follows the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
 [ha-solarman](https://github.com/davidrapan/ha-solarman) `deye_p3` profile).

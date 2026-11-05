@@ -33,8 +33,10 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
     _attr_name = "Grid charge"
     _attr_icon = "mdi:transmission-tower-import"
 
+    settings = True  # the program flags and the enable are settings registers: read on the settings poll
+
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "deye_grid_charge", "switch.deye_grid_charge")
+        super().__init__(coordinator, "deye_grid_charge", "switch", "_grid_charge")
 
     @property
     def available(self) -> bool:
@@ -55,8 +57,9 @@ class GridChargeSwitch(DeyeEntity, SwitchEntity):
             (w | GRID_FLAG) if on else (w & ~GRID_FLAG)
             for w in (self.regs.get(r.PROGRAM_CHARGE + i, 0) for i in range(6))
         ]
-        await self.coordinator.write(r.PROGRAM_CHARGE, flags)
-        await self.coordinator.write(r.REG_GRID_CHARGE, [1 if on else 0])
+        await self.coordinator.write(r.PROGRAM_CHARGE, flags, refresh=False)
+        await self.coordinator.write(r.REG_GRID_CHARGE, [1 if on else 0], refresh=False)
+        await self.coordinator.async_request_refresh()  # one poll after both writes: it reads the blocks they touched
 
 
 class SettingSwitch(ControlEntity, SwitchEntity):

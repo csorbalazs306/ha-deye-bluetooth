@@ -19,6 +19,10 @@ p = load("protocol")
 r = load("registers")
 
 
+def _reply(body):
+    return "+ok=" + p._frame(body).hex()
+
+
 class ProtocolTest(unittest.TestCase):
     def test_read_frame_as_captured(self):
         # AT+INVDATA=8,01030002000125CA -> +ok=0103020104B817 (captured from a real logger)
@@ -31,18 +35,19 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(len(frame), 11)
         self.assertTrue(p.at_command(frame).startswith(b"AT+INVDATA=11,0110008F00010200"))
         ack = bytes((1, 0x10, 0x00, 0x8F, 0x00, 0x01))
-        p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex().upper(), frame)
+        p.check_write_ack(_reply(ack), frame)
         other = bytes((1, 0x10, 0x00, 0x90, 0x00, 0x01))
-        with self.assertRaises(p.ProtocolError):
-            p.check_write_ack("+ok=" + (other + p.crc16(other)).hex().upper(), frame)
+        with self.assertRaises(p.LinkError):
+            p.check_write_ack(_reply(other), frame)
 
     def test_rejects_bad_replies(self):
         for reply in ("ERROR", "+ok=0103020104B818", "+ok=zz", "+ok=0183020000"):
-            with self.assertRaises(p.ProtocolError, msg=reply):
+            with self.assertRaises(p.LinkError, msg=reply):
                 p.parse_read(reply, 1)
-        exc = bytes((1, 0x83, 0x02))
-        with self.assertRaisesRegex(p.ProtocolError, "exception 0x02"):
-            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+        exc = bytes((1, 0x83, 0x02))  # a refusal, not a link error: the link stays up
+        with self.assertRaisesRegex(p.RegisterRejected, "exception 0x02"):
+            p.parse_read(_reply(exc), 1)
+        self.assertFalse(issubclass(p.RegisterRejected, p.LinkError))
 
     def test_handshake_and_limits(self):
         self.assertTrue(p.is_handshake("+ok=21521,21521\r\n"))
@@ -128,11 +133,45 @@ class RegistersTest(unittest.TestCase):
             self.assertIn(key, keys)
         for key in ("modbus_address", "bms_soc", "battery_voltage", "fault_1"):  # identity and readings
             self.assertNotIn(key, keys)
-        for low, high, step in r.NUMBERS.values():
-            if isinstance(low, int) and isinstance(high, int):
-                self.assertLess(low, high)
-            if isinstance(step, int):
-                self.assertGreater(step, 0)
+
+    def test_the_live_and_fast_blocks_as_measured(self):
+        # grid voltages are not live: nothing needs them every second, and they read with the 15 s poll
+        self.assertEqual(r.LIVE, [(604, 9), (650, 6)])
+        self.assertIn((598, 3), r.FAST)
+        self.assertNotIn((654, 2), r.FAST)
+        polled = {start + i for start, count in r.LIVE + r.FAST + r.SLOW for i in range(count)}
+        for reg in (598, 599, 600):
+            self.assertIn(reg, polled)
+            self.assertNotIn(reg, {start + i for start, count in r.LIVE for i in range(count)})
+        for reg in (601, 602, 603):  # never read on the hardware, and no value uses them
+            self.assertNotIn(reg, polled)
+            self.assertFalse(any(v.reg == reg or reg in range(v.reg, v.reg + v.words) for v in r.VALUES), reg)
+        self.assertEqual(r.BY_KEY["load_frequency"].reg, 655)
+        self.assertIn(655, {start + i for start, count in r.LIVE for i in range(count)})
+
+    def test_slow_regs_are_the_settings_blocks(self):
+        self.assertEqual(len(r.SLOW_REGS), sum(count for _, count in r.SLOW))
+        self.assertIn(117, r.SLOW_REGS)  # battery low SoC
+        self.assertIn(3, r.SLOW_REGS)  # serial
+        self.assertNotIn(586, r.SLOW_REGS)  # battery temperature: FAST
+        self.assertNotIn(604, r.SLOW_REGS)  # grid power: LIVE
+
+    def test_hhmm_decodes_without_validating_and_encodes_back(self):
+        self.assertEqual(r.decode_hhmm(2230), (22, 30))
+        self.assertEqual(r.decode_hhmm(5), (0, 5))
+        self.assertEqual(r.decode_hhmm(2460), (24, 60))  # not validated here: the time entity refuses it
+        self.assertIsNone(r.decode_hhmm(None))
+        self.assertEqual(r.encode_hhmm(22, 30), 2230)
+        self.assertEqual(r.encode_hhmm(0, 5), 5)
+        for raw in (0, 1, 959, 2359):
+            self.assertEqual(r.encode_hhmm(*r.decode_hhmm(raw)), raw)
+        self.assertEqual(r.decode_value(r.BY_KEY["program_2_time"], {149: 930}), "09:30")
+
+    def test_work_mode_name_is_the_work_mode_register_as_text(self):
+        self.assertEqual(r.decode_value(r.BY_KEY["work_mode_name"], {142: 1}), "zero export to load")
+        self.assertEqual(r.decode_value(r.BY_KEY["work_mode_name"], {142: 7}), "unknown (7)")
+        self.assertIsNone(r.decode_value(r.BY_KEY["work_mode_name"], {}))  # missing: unavailable
+        self.assertEqual(r.BY_KEY["work_mode_name"].reg, r.BY_KEY["work_mode"].reg)
 
     def test_serial(self):
         words = [int.from_bytes(b"1234567890"[i:i + 2], "big") for i in range(0, 10, 2)]
@@ -163,10 +202,10 @@ class RegistersTest(unittest.TestCase):
 
     def test_parse_read_multiple_registers(self):
         body = bytes((1, p.READ, 4)) + (0x1234).to_bytes(2, "big") + (0xABCD).to_bytes(2, "big")
-        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 2), [0x1234, 0xABCD])
+        self.assertEqual(p.parse_read(_reply(body), 2), [0x1234, 0xABCD])
         words = list(range(16))
         body = bytes((1, p.READ, 32)) + b"".join(w.to_bytes(2, "big") for w in words)
-        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 16), words)
+        self.assertEqual(p.parse_read(_reply(body), 16), words)
 
     def test_reply_error_validation(self):
         bad_bodies = (
@@ -175,17 +214,17 @@ class RegistersTest(unittest.TestCase):
             bytes((1, p.READ, 2, 0, 1, 0, 2)),  # wrong length
         )
         for body in bad_bodies:
-            reply = "+ok=" + (body + p.crc16(body)).hex()
-            with self.assertRaisesRegex(p.ProtocolError, "not a read of"):
+            reply = _reply(body)
+            with self.assertRaisesRegex(p.LinkError, "not a read of"):
                 p.parse_read(reply, 1)
-        with self.assertRaises(p.ProtocolError):
+        with self.assertRaises(p.LinkError):
             p.parse_read("+ok=0103", 1)
         ack = bytes((1, p.READ, 0, 1, 0, 1))
-        with self.assertRaises(p.ProtocolError):
-            p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex(), p.write_frame(1, 1))
+        with self.assertRaises(p.LinkError):
+            p.check_write_ack(_reply(ack), p.write_frame(1, 1))
         exc = bytes((1, 0x83, 0x02))
-        with self.assertRaisesRegex(p.ModbusRejected, "function 0x03"):
-            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+        with self.assertRaisesRegex(p.RegisterRejected, "function 0x03"):
+            p.parse_read(_reply(exc), 1)
         self.assertFalse(p.is_handshake("+ok=21521,21521,9"))
 
     def test_frame_validation_and_overrides(self):

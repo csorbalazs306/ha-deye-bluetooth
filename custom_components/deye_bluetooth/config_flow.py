@@ -7,7 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_discovered_service_info
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
@@ -58,7 +58,7 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlowWithReload:
         return DeyeBluetoothOptionsFlow()
 
 
@@ -76,7 +76,7 @@ class _IntBox(selector.NumberSelector):
 
 
 def _validator(option: o.Option):
-    if option.low is not None and option.high is not None:
+    if option.low is not None:
         # plain vol.Range serialises to a number selector with min+max, whose
         # default mode is "slider"; an explicit box keeps every field editable
         return _IntBox(
@@ -106,18 +106,20 @@ def _schema(current: Mapping[str, Any]) -> vol.Schema:
 
 
 def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
-    chars = (flat.get(o.WRITE_CHAR), flat.get(o.NOTIFY_CHAR))
-    if not all(isinstance(char, str) and _UUID.fullmatch(char) for char in chars):
+    if not (_UUID.fullmatch(flat[o.WRITE_CHAR]) and _UUID.fullmatch(flat[o.NOTIFY_CHAR])):
         return {"base": "bad_uuid"}
-    try:
-        if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
-            return {"base": "stale_too_short"}  # values would go unavailable between two polls
-    except (KeyError, TypeError):
-        return {"base": "stale_too_short"}
+    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
+        return {"base": "stale_too_short"}  # values would go unavailable between two polls
     return {}
 
 
-class DeyeBluetoothOptionsFlow(OptionsFlow):
+class DeyeBluetoothOptionsFlow(OptionsFlowWithReload):
+    """Saving the options reloads the entry, so the link and the poll intervals take the new values.
+
+    OptionsFlowWithReload does the reload; the entry has no update listener (Home Assistant refuses both), so a
+    change of the title alone does not reload.
+    """
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         current: Mapping[str, Any] = self.config_entry.options
         errors: dict[str, str] = {}

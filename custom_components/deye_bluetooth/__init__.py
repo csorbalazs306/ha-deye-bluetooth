@@ -8,24 +8,30 @@ the link; this polls the register blocks of registers.py.
 Entities (the prefix is ``deye`` for the first logger, ``deye_2`` for the second, ...):
 - the summary: ``sensor.deye_grid_power``, ``sensor.deye_grid_phase_*``,
   ``binary_sensor.deye_grid``, ``switch.deye_grid_charge``, ...;
-- every decoded register as ``sensor.deye_inverter_<key>``;
+- every decoded register as ``sensor.deye_inverter_<key>``; those that repeat a control
+  or a summary sensor are disabled by default;
 - the settings of registers.py's NUMBERS, SELECTS, TIMES and ON_OFF_SWITCHES as
   controls on the device page, which write only when someone changes them.
 
-The grid phases and the load are read every second (live_interval: the logger
-answers in ~0.3 s and the values change about every second), everything else
-every 15 s, the settings every 5 min.  Only the intervals, write safety and the
+The grid currents, powers and the load are read every second (live_interval: the logger
+answers in ~0.3 s and the values change about every second), the grid voltages and
+everything else every 15 s, the settings every 5 min.  Only the intervals, write safety and the
 Bluetooth link are on the options page (options.py); the inverter's own settings
 are controls on the device page.
 
 Writes (the controls, the admin-only ``deye_bluetooth.write_register`` action) are
 off until the "Allow writes" option is on; each written register is read back and a
-mismatch is an error.  Only changed registers are written (EEPROM).
+mismatch is an error.  Only changed registers are written (EEPROM).  The next poll
+reads again the poll blocks a write touched.  After a failed connection the polls wait
+2, 4, ... up to 60 s before they connect again; the read and write actions do not wait.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from math import inf
 from time import monotonic  # not "import time": this package's time.py would replace it
@@ -33,54 +39,85 @@ from time import monotonic  # not "import time": this package's time.py would re
 import voluptuous as vol
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.const import ATTR_CONFIG_ENTRY_ID, CONF_ADDRESS, Platform
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.helpers.service import async_get_config_entry, async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import options as o
 from . import registers as r
-from .protocol import MODBUS_MAX_READ
-from .transport import Link, LinkError, RegisterRejected
+from .protocol import MODBUS_MAX_READ, LinkError, RegisterRejected
+from .transport import Link
 
 DOMAIN = "deye_bluetooth"
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.SELECT, Platform.TIME]
-CONF_ADDRESS = "address"
 CONF_PREFIX = "entity_prefix"
-CONF_ENTRY = "config_entry_id"
 
 _LOGGER = logging.getLogger(__name__)
 
+MAX_BACKOFF_S = 60  # the wait after a failed connection is 2 ** failures seconds, at most this
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+_WORD_VALUE = vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))
 WRITE_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
+        vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+        vol.Required("address"): _WORD_VALUE,
         vol.Required("value"): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
-            vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))], vol.Length(min=1, max=16)),
+            _WORD_VALUE,
+            vol.All(cv.ensure_list, [_WORD_VALUE], vol.Length(min=1, max=16)),
         ),
     }
 )
 READ_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
+        vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+        vol.Required("address"): _WORD_VALUE,
         vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=MODBUS_MAX_READ)),
     }
 )
+
+
+@dataclass(frozen=True, eq=False)  # by identity: each group is a key of the read times
+class PollGroup:
+    """Poll blocks read together: on every update (interval_key None) or on an option's interval.
+
+    stale_key is the option for how long their values stay fresh.
+    """
+
+    blocks: list[tuple[int, int]]
+    interval_key: str | None
+    stale_key: str
+
+
+POLL_GROUPS = (
+    PollGroup(r.LIVE, None, o.STALE_S),
+    PollGroup(r.FAST, o.SCAN_S, o.STALE_S),
+    PollGroup(r.SLOW, o.SETTINGS_S, o.SETTINGS_STALE_S),
+)
+LIVE_GROUP, FAST_GROUP, SLOW_GROUP = POLL_GROUPS
+_BLOCKS = {start: (count, group) for group in POLL_GROUPS for start, count in group.blocks}  # start -> (count, group)
+
+
+class _OutOfRange(LinkError):
+    """The logger is not in range: nothing was tried, so there is no backoff and the next poll looks again."""
+
+
+def _blocks_at(register: int) -> list[int]:
+    """The starts of the poll blocks that read this register."""
+    return [start for start, (count, _) in _BLOCKS.items() if start <= register < start + count]
 
 
 class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     """The data: {register: word} of every fresh block."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._options = {**o.DEFAULTS, **entry.options}  # any change of the options reloads the entry
         super().__init__(
             hass, _LOGGER, config_entry=entry, name=DOMAIN,
-            update_interval=timedelta(seconds=entry.options.get(o.LIVE_S, o.DEFAULTS[o.LIVE_S])),
+            update_interval=timedelta(seconds=self._options[o.LIVE_S]),
         )
         self.address: str = entry.data[CONF_ADDRESS]
         self.prefix: str = entry.data[CONF_PREFIX]
@@ -91,69 +128,114 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         )
         self.lock = asyncio.Lock()
         self.blocks: dict[int, tuple[float, list[int]]] = {}  # start -> (monotonic, words)
+        self.fresh_blocks: frozenset[int] = frozenset()  # the starts of the blocks fresh at the last update
         # never read: monotonic() is the host's uptime, which can be below any interval
-        self._fast_at = -inf
-        self._slow_at = -inf
-        self.full_poll = True  # this update read more than the live blocks
+        self._read_at = {group: -inf for group in POLL_GROUPS}
+        self._pending: set[int] = set()  # blocks a write touched: read on the next poll
+        self._retry_at = -inf  # no poll connects before this, after a failed connection
+        self.full_poll = True  # the last update read a FAST block
+        self.slow_poll = True  # the last update read a SLOW block
         self.failures = 0
         self.last_error = ""
 
     def option(self, key: str):
-        """What the options page says, or its default (stale keys keep their value)."""
-        return self.config_entry.options[key] if key in self.config_entry.options else o.DEFAULTS[key]
+        """What the options page says, or its default."""
+        return self._options[key]
 
     @property
     def writes_allowed(self) -> bool:
         return bool(self.option(o.WRITES))
 
-    async def _ensure_link(self) -> None:
-        if self.link.connected:
-            return
+    def _device(self):
         device = bluetooth.async_ble_device_from_address(self.hass, self.address, connectable=True)
         if device is None:
-            raise LinkError(f"{self.address} not in range of a connectable Bluetooth adapter")
+            raise _OutOfRange(f"{self.address} not in range of a connectable Bluetooth adapter")
+        return device
+
+    async def _connect(self, device) -> None:
         await self.link.connect(device)
+        if self.link.found_console is not None:
+            self._remember_console(*self.link.found_console)
+
+    def _remember_console(self, write_char: str, notify_char: str) -> None:
+        """Keep the pair a scan found in the entry, so the next start does not scan again.
+
+        async_update_entry does not reload the entry: only the options flow does.
+        """
+        if (write_char, notify_char) == (self._options[o.WRITE_CHAR], self._options[o.NOTIFY_CHAR]):
+            return
+        self._options[o.WRITE_CHAR], self._options[o.NOTIFY_CHAR] = write_char, notify_char
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, o.WRITE_CHAR: write_char, o.NOTIFY_CHAR: notify_char},
+        )
+
+    async def _ensure_link(self) -> None:
+        """For the read and write actions: connect if needed, whatever the backoff says."""
+        if not self.link.connected:
+            await self._connect(self._device())
+
+    async def _poll(self) -> bool:
+        """Connect if needed, then read the groups that are due and the blocks writes left pending.
+
+        False when the reconnect is still backed off: nothing was read.
+        """
+        if not self.link.connected:
+            device = self._device()  # out of range: no backoff, the next poll looks again
+            if monotonic() < self._retry_at:
+                return False
+            await self._connect(device)
+        now = monotonic()
+        due = [g for g in POLL_GROUPS if g.interval_key is None or now - self._read_at[g] >= self.option(g.interval_key)]
+        blocks = [
+            (start, count) for group in POLL_GROUPS for start, count in group.blocks
+            if group in due or start in self._pending
+        ]
+        await self._read_blocks(blocks)
+        now = monotonic()
+        for group in due:
+            self._read_at[group] = now
+        return True
 
     async def _read_blocks(self, blocks: list[tuple[int, int]]) -> None:
         for start, count in blocks:
             try:
                 words = await self.link.read(start, count)
-            except RegisterRejected as exc:  # its values stay unavailable, the rest goes on
+            except RegisterRejected as exc:  # its values age out, the rest goes on
                 _LOGGER.debug("Deye Bluetooth: registers %d+%d: %s", start, count, exc)
-                continue
-            self.blocks[start] = (monotonic(), words)
+            else:
+                self.blocks[start] = (monotonic(), words)
+            self._pending.discard(start)  # answered, even by a refusal: reading it again now would not change that
+            group = _BLOCKS[start][1]
+            if group is FAST_GROUP:
+                self.full_poll = True
+            elif group is SLOW_GROUP:
+                self.slow_poll = True
 
     async def _async_update_data(self) -> dict[int, int]:
         async with self.lock:
-            now = monotonic()
-            fast_due = now - self._fast_at >= self.option(o.SCAN_S)
-            slow_due = now - self._slow_at >= self.option(o.SETTINGS_S)
-            self.full_poll = False
+            self.full_poll = self.slow_poll = False
             try:
-                await self._ensure_link()
-                await self._read_blocks(r.LIVE)
-                if fast_due:
-                    await self._read_blocks(r.FAST)
-                    self._fast_at = monotonic()
-                    self.full_poll = True
-                if slow_due:
-                    await self._read_blocks(r.SLOW)
-                    self._slow_at = monotonic()
-                self.failures, self.last_error = 0, ""
+                polled = await self._poll()
             except LinkError as exc:
                 self.failures += 1
                 self.last_error = str(exc)
                 await self.link.close()
+                if not isinstance(exc, _OutOfRange):
+                    self._retry_at = monotonic() + min(2 ** min(self.failures, 6), MAX_BACKOFF_S)
                 _LOGGER.debug("Deye BLE poll failed (%d in a row): %s", self.failures, exc)
+            else:
+                if polled:
+                    self.failures, self.last_error, self._retry_at = 0, "", -inf
+        self.fresh_blocks = frozenset(start for start in self.blocks if self._fresh(start))
         data = self.registers()
-        if not any(start in self.blocks and self._fresh(start) for start, _ in r.LIVE + r.FAST):
+        if not any(start in self.fresh_blocks for start, _ in LIVE_GROUP.blocks + FAST_GROUP.blocks):
             raise UpdateFailed(f"no fresh data ({self.last_error or 'no reply'})")
         return data
 
     def _fresh(self, start: int) -> bool:
-        stale = self.option(o.SETTINGS_STALE_S) if any(start == s for s, _ in r.SLOW) else self.option(o.STALE_S)
         at, _ = self.blocks[start]
-        return monotonic() - at < stale
+        return monotonic() - at < self.option(_BLOCKS[start][1].stale_key)
 
     def registers(self) -> dict[int, int]:
         """The words of the fresh blocks only: a stale value is no value."""
@@ -163,35 +245,51 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 out.update({start + i: w for i, w in enumerate(words)})
         return out
 
+    @asynccontextmanager
+    async def _session(self, what: str) -> AsyncIterator[None]:
+        """The lock and a connected link for one read or write action.
+
+        A broken link is closed, so the next action connects again.  A refused register is an answer from the
+        inverter: the link stays up and the action fails.
+        """
+        async with self.lock:
+            try:
+                await self._ensure_link()
+                yield
+            except LinkError as exc:
+                await self.link.close()
+                raise HomeAssistantError(f"Deye Bluetooth: {what} failed: {exc}") from exc
+            except RegisterRejected as exc:
+                raise HomeAssistantError(f"Deye Bluetooth: {what} failed: {exc}") from exc
+
     async def read(self, address: int, count: int) -> list[int]:
         """Any registers, on demand (the read_registers action: finding a value)."""
-        async with self.lock:
-            try:
-                await self._ensure_link()
-                return await self.link.read(address, count)
-            except LinkError as exc:
-                await self.link.close()
-                raise HomeAssistantError(f"Deye Bluetooth: read of {address} failed: {exc}") from exc
+        async with self._session(f"read of {address}"):
+            return await self.link.read(address, count)
 
-    async def write(self, address: int, values: list[int]) -> None:
-        """Write consecutive registers, each read back; unchanged ones are skipped."""
+    async def write(self, address: int, values: list[int], *, refresh: bool = True) -> None:
+        """Write consecutive registers, each read back; unchanged ones are skipped.
+
+        The poll blocks that were written are read on the next poll.  That poll is requested now unless refresh is
+        False: the caller then requests it once, after several writes.
+        """
         if not self.writes_allowed:
             raise HomeAssistantError("Deye Bluetooth: writes are off (integration options → Allow writes)")
-        async with self.lock:
-            try:
-                await self._ensure_link()
-                current = await self.link.read(address, len(values))
-                for i, value in enumerate(values):
-                    if current[i] != value:
-                        await self._write_verified(address + i, value)
-                self._fast_at = self._slow_at = -inf  # read everything again on the next poll
-            except LinkError as exc:
-                await self.link.close()
-                raise HomeAssistantError(f"Deye Bluetooth: write to {address} failed: {exc}") from exc
+        async with self._session(f"write to {address}"):
+            current = await self.link.read(address, len(values))
+            for i, value in enumerate(values):
+                if current[i] == value:
+                    continue
+                try:
+                    await self._write_verified(address + i, value)
+                finally:  # attempted, so possibly changed even if it failed: its block is read again
+                    self._pending.update(_blocks_at(address + i))
         _LOGGER.info("Deye Bluetooth: wrote %s to register %d", values, address)
-        await self.async_request_refresh()
+        if refresh:
+            await self.async_request_refresh()
 
     async def _write_verified(self, address: int, value: int) -> None:
+        """One register, written and read back.  A link error is retried after a wait; a refusal is not."""
         attempts = self.option(o.WRITE_ATTEMPTS)
         for attempt in range(1, attempts + 1):
             try:
@@ -199,31 +297,15 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 await self.link.write(address, value)
                 (shown,) = await self.link.read(address, 1)
             except LinkError as exc:
-                await self.link.close()
                 if attempt == attempts:
-                    raise
+                    raise  # the caller closes the link
+                await self.link.close()
                 _LOGGER.debug("Deye Bluetooth: write %d=%d attempt %d: %s", address, value, attempt, exc)
                 await asyncio.sleep(2.0 * attempt)
                 continue
             if shown != value:
                 raise LinkError(f"register {address} reads {shown} after writing {value}")
             return
-
-
-@callback
-def _coordinator(hass: HomeAssistant, call: ServiceCall) -> DeyeCoordinator:
-    """The logger the action names; it may be left out while there is only one."""
-    entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    wanted = call.data.get(CONF_ENTRY)
-    if wanted is not None:
-        entries = [entry for entry in entries if entry.entry_id == wanted]
-        if not entries:
-            raise ServiceValidationError(f"Deye Bluetooth: no loaded logger {wanted}")
-    if not entries:
-        raise ServiceValidationError("Deye Bluetooth: no logger is loaded")
-    if len(entries) > 1:
-        raise ServiceValidationError(f"Deye Bluetooth: several loggers, set {CONF_ENTRY}")
-    return entries[0].runtime_data
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -237,11 +319,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def write_register(call: ServiceCall) -> None:
         value = call.data["value"]
-        await _coordinator(hass, call).write(call.data["address"], value if isinstance(value, list) else [value])
+        coordinator = async_get_config_entry(hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID)).runtime_data
+        await coordinator.write(call.data["address"], value if isinstance(value, list) else [value])
 
     async def read_registers(call: ServiceCall) -> ServiceResponse:
         start, count = call.data["address"], call.data["count"]
-        return {"address": start, "values": await _coordinator(hass, call).read(start, count)}
+        coordinator = async_get_config_entry(hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID)).runtime_data
+        return {"address": start, "values": await coordinator.read(start, count)}
 
     async_register_admin_service(hass, DOMAIN, "write_register", write_register, schema=WRITE_SCHEMA)
     hass.services.async_register(DOMAIN, "read_registers", read_registers, schema=READ_SCHEMA,
@@ -253,19 +337,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = DeyeCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    device_type = coordinator.registers().get(r.DEVICE_TYPE_REG)
+    device_type = coordinator.data.get(r.DEVICE_TYPE_REG)
     if device_type is not None and device_type not in r.VERIFIED_DEVICE_TYPES:
         _LOGGER.warning(
             "Deye Bluetooth: device type 0x%X is not verified, its register map may differ; "
             "keep writes off until the values look right", device_type,
         )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(_reload))
     return True
-
-
-async def _reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

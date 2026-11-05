@@ -34,8 +34,8 @@
               "settings_stale_after": "Settings go unavailable after (s)"
             },
             "data_description": {
-              "live_interval": "Grid phases and load. Each change is a recorder row.",
-              "scan_interval": "Battery, PV, inverter, energy counters.",
+              "live_interval": "Grid currents and powers, and the load. Each change is a recorder row.",
+              "scan_interval": "Grid voltages, battery, PV, inverter, energy counters.",
               "settings_interval": "Identity and settings registers.",
               "stale_after": "Older values are unavailable, so nothing acts on them."
             }
@@ -62,7 +62,9 @@
               "notify_characteristic": "Notify characteristic UUID"
             },
             "data_description": {
-              "max_read": "Longer reads are split. The verified logger drops the link above 16."
+              "max_read": "Longer reads are split. The verified logger drops the link above 16.",
+              "write_characteristic": "If the logger lacks this one, the pair that answers is found and saved here.",
+              "notify_characteristic": "Saved together with the write characteristic when a pair is found."
             }
           }
         }

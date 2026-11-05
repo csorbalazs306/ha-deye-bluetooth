@@ -1,6 +1,6 @@
 [project]
 name = "ha-deye-bluetooth"
-version = "1.3.0"
+version = "1.3.1"
 description = "Home Assistant integration for Deye hybrid inverters over the logger's Bluetooth"
 license = "MIT"
 requires-python = ">=3.14"

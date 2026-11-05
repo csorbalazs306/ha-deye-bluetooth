@@ -25,7 +25,7 @@ pip install -r requirements_test.txt ruff
 ```
 
 Home Assistant itself is not needed: `pytest-homeassistant-custom-component` brings the test harness. Bluetooth is
-not needed either: `tests/test_integration.py` replaces the link with a fake one.
+not needed either: `tests/conftest.py` replaces the link with the fake one of `tests/support.py`.
 
 ## Checks
 
@@ -39,8 +39,11 @@ pytest
 
 - `tests/test_pure.py` loads `protocol.py` and `registers.py` directly, without Home Assistant. Add a test there for
   every framing or decoding change.
-- `tests/test_integration.py` sets the integration up in a real Home Assistant with a fake link. Add a test there for
-  every entity, option or service change, and assert the value or the write, not only that the entity exists.
+- The other tests set the integration up in a real Home Assistant with the fake link: `tests/test_integration.py`
+  (setup, entities, services, writes), `tests/test_config_flow.py` (the options page and the discovery flow),
+  `tests/test_link.py` (the BLE console, with a fake GATT) and `tests/test_polling.py` (polls, backoff, availability).
+  Add a test to the file of its topic for every entity, option or service change, and assert the value or the write,
+  not only that the entity exists. The fixtures and the fake link are in `tests/conftest.py` and `tests/support.py`.
 
 A bug fix needs a test that fails before it and passes after. A new feature needs a test for the normal case and one
 for the refusal or the missing data.
@@ -49,7 +52,7 @@ for the refusal or the missing data.
 
 | File | What belongs there |
 |---|---|
-| `__init__.py` | the coordinator and the two service actions |
+| `__init__.py` | the coordinator (poll groups, reconnect backoff, writes) and the two service actions |
 | `registers.py` | the register map: poll blocks, values, decoding, setting ranges |
 | `protocol.py` | Modbus RTU framing and the logger's AT console; no I/O, no Home Assistant |
 | `transport.py` | the GATT link: connect, notify, command, read, write |
@@ -71,12 +74,20 @@ Two rules keep the code testable and the map in one place:
 1. Add a `Value` to `VALUES` in `registers.py`: `key`, `name`, address, and the unit, scale, `signed`, `words`,
    `offset`, `options`, `mask` or `fmt` that apply.
 2. Put its addresses in a block of `LIVE`, `FAST` or `SLOW`. `test_blocks_fit_the_logger` checks that every value is
-   polled, that no address is read twice and that no block is longer than the logger answers.
+   polled, that no address is read twice and that no block is longer than the logger answers. A register in `SLOW`
+   is a settings entity: it is written on the settings poll only (`SLOW_REGS`).
 3. Add a decoding case to `tests/test_pure.py` with the words the inverter would send.
 4. Only if the register is a single-word setting, add it to `NUMBERS`, `SELECTS`, `TIMES` or `ON_OFF_SWITCHES`. The
-   ranges only fit the register; they are not safety limits.
+   ranges only fit the register; they are not safety limits. Its `sensor.deye_inverter_<key>` detail sensor is then
+   disabled by default, like the source of a summary sensor (`DUPLICATES` in `entity.py` computes that).
 
 Readings, identity, the inverter clock and the Modbus address are not controls.
+
+## Changing the poll groups
+
+`POLL_GROUPS` in `__init__.py` says which blocks are read on every update, on the fast interval or on the settings
+interval, and how long their values stay fresh. A write re-reads only the blocks of the registers it touched, on the
+next poll; a block that is in no group needs no re-read.
 
 ## Adding an option
 

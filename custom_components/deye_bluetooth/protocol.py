@@ -25,12 +25,15 @@ MAX_READ = 16  # default: this logger does not answer a longer read and drops th
 _HANDSHAKE = re.compile(r"\+ok=\d+,\d+")
 
 
-class ProtocolError(Exception):
-    """A malformed reply, a bad CRC or a Modbus exception."""
+class LinkError(Exception):
+    """No link, no reply, or a reply that makes no sense."""
 
 
-class ModbusRejected(ProtocolError):
-    """The inverter answered, and refused: the link itself is fine."""
+class RegisterRejected(Exception):
+    """The inverter answered with a Modbus exception: the link is fine, the register refused the request.
+
+    Not a LinkError: a refusal is never a reason to reconnect or to retry the write.
+    """
 
 
 def crc16(data: bytes) -> bytes:
@@ -70,29 +73,29 @@ def is_handshake(reply: str) -> bool:
 def _body(reply: str) -> bytes:
     reply = reply.strip()
     if not reply.startswith("+ok="):
-        raise ProtocolError(f"no +ok= in {reply!r}")
+        raise LinkError(f"no +ok= in {reply!r}")
     try:
         raw = bytes.fromhex(reply[4:])
     except ValueError as exc:
-        raise ProtocolError(f"not hex: {reply!r}") from exc
+        raise LinkError(f"not hex: {reply!r}") from exc
     if len(raw) < 5:
-        raise ProtocolError(f"too short: {reply!r}")
+        raise LinkError(f"too short: {reply!r}")
     body, crc = raw[:-2], raw[-2:]
     if crc16(body) != crc:
-        raise ProtocolError(f"CRC mismatch: {reply!r}")
+        raise LinkError(f"CRC mismatch: {reply!r}")
     if body[1] & 0x80:
-        raise ModbusRejected(f"Modbus exception 0x{body[2]:02X} (function 0x{body[1] & 0x7F:02X})")
+        raise RegisterRejected(f"Modbus exception 0x{body[2]:02X} (function 0x{body[1] & 0x7F:02X})")
     return body
 
 
 def parse_read(reply: str, count: int) -> list[int]:
     body = _body(reply)
     if body[1] != READ or body[2] != 2 * count or len(body) != 3 + 2 * count:
-        raise ProtocolError(f"not a read of {count} registers: {reply!r}")
+        raise LinkError(f"not a read of {count} registers: {reply!r}")
     return [int.from_bytes(body[i:i + 2], "big") for i in range(3, len(body), 2)]
 
 
 def check_write_ack(reply: str, frame: bytes) -> None:
     body = _body(reply)
     if body[1] != WRITE or body[2:6] != frame[2:6]:
-        raise ProtocolError(f"write not acknowledged: {reply!r}")
+        raise LinkError(f"write not acknowledged: {reply!r}")
