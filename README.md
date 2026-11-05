@@ -53,7 +53,10 @@ Or search for **Deye Bluetooth** in HACS, download it, and restart Home Assistan
 
 ### Manually
 
-Copy `custom_components/deye_bluetooth` into your `config/custom_components` folder and restart.
+Copy `custom_components/deye_bluetooth` into your `config/custom_components` folder and restart. **Keep a copy of
+the old folder off the HA host before upgrading**: downgrading is a file swap plus a restart, and a file swap does
+not restore the config entry's options. After restarting, check that the installed `manifest.json` version matches
+the release you intended (HACS reads the version from the release tag, HA from this file).
 
 ## Setup
 
@@ -98,7 +101,7 @@ The first logger gets the prefix `deye`, the second `deye_2`, and so on.
 | `sensor.deye_pv_power`, `sensor.deye_pv{1,2}_power` | PV (W) |
 | `sensor.deye_battery_{soc,power,capacity}` | Battery: discharge > 0, charge < 0 |
 | `sensor.deye_{grid_import,grid_export,load,pv}_energy` | Totals (kWh), for the Energy dashboard |
-| `binary_sensor.deye_grid` | The grid is present |
+| `binary_sensor.deye_grid` | The grid is present: the relay is closed, or a phase is at least 100 V (fixed) |
 | `switch.deye_grid_charge` | Battery charges from the grid, see [below](#grid-charge-switch) |
 | `sensor.deye_inverter_<key>` | Every decoded register |
 | `number.`, `select.`, `time.`, `switch.deye_inverter_<key>` | The settings |
@@ -108,7 +111,9 @@ The controls cover every setting of the register map, grid protection and batter
 controls, and neither is the Modbus address, because a new one ends the link.
 
 Power limits follow the rated power the inverter reports. All the other ranges only fit the register: they do not
-protect anything.
+protect anything. Since 1.2.0 they are fixed (e.g. low SoC 0–100 %, current 0–2000 A, zero export 0–10000 W) and
+the grid-present threshold is a fixed 100 V — the old configurable *Limits* options are gone. **Check each value
+against your inverter and battery manual before allowing writes.**
 
 ### Grid-charge switch
 

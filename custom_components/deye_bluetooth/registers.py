@@ -284,14 +284,19 @@ BY_KEY = {v.key: v for v in VALUES}
 # identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
 # register, they do not protect anything.  A limit is a number or RATED (what the inverter reports).
 # A "word" is the raw register, bit fields included.
-RATED = None
+class _RatedPower:
+    """Sentinel: use the inverter's own rated power (registers 20/21)."""
+
+
+RATED = _RatedPower()
+DEFAULT_RATED_W = 20000  # fallback when the inverter has not reported its rated power
 _BATTERY_V = (0, 100, 0.01)
 _SOC = (0, 100, 1)
 _WORD = (0, 0xFFFF, 1)
 _AMPS = (0, 2000, 1)
 _POWER = (0, RATED, 100)
 _HOURS = (0, 24, 0.1)
-NUMBERS: dict[str, tuple[float | None, float | None, float]] = {  # key: (min, max, step)
+NUMBERS: dict[str, tuple[float | _RatedPower, float | _RatedPower, float]] = {  # key: (min, max, step)
     "max_sell_power": _POWER,
     "zero_export_power": (0, 10000, 1),
     "battery_max_charge_current": _AMPS,

@@ -1,16 +1,30 @@
 # Changelog
 
+## 1.3.0
+
+- A logger without the configured write or notify characteristic is no longer a dead end: the pair that answers the
+  handshake is found on connect and logged as a warning. The service UUID stays fixed, discovery needs it.
+- The entry migration the 1.2.0 notes describe ships here: stale *Limits* options are removed on upgrade.
+- Power limits fall back to 20000 W until the inverter has reported its rated power, instead of a maximum of 0.
+- The options page rejects fractions in whole-number fields and no longer fails on missing or malformed values.
+- Tests and Validate also run on published releases and on demand.
+
 ## 1.2.0
 
+- **Breaking change — check your settings before allowing writes:** the old *Limits* options (maximum battery
+  current, maximum zero export power, power step, lowest allowed low SoC, grid present above) no longer exist. On
+  upgraded entries their stored values are ignored and removed by the entry migration. The number entities now use
+  the register's own range (battery low SoC 0–100 %, currents 0–2000 A, zero export 0–10000 W) and the
+  grid-present threshold is a fixed 100 V, not a device-page control. **Your previous custom caps no longer apply
+  and the wider ranges do not protect anything — re-check every setting against your inverter and battery manual.**
+  Power limits still follow the rated power the inverter reports.
 - Every setting of the register map is now a control: grid protection, grid standard, battery chemistry and voltages,
   generator, smart load, AC coupling and peak shaving. **These write without safety checks, once *Allow writes* is on, and
   most are not tried on real hardware.** Read the extended disclaimer in the README.
 - Signed settings accept negative values (battery temperature compensation).
-- The options page keeps only polling, write safety and the Bluetooth link. The inverter/battery limits (maximum
-  battery current, maximum zero export power, power step, lowest allowed low SoC, grid present above) are gone: every
-  inverter setting is a control under **Configuration** on the device page. The number entities now use the register's
-  range, so a low SoC below 10 % is accepted again (0–100 %).
-- Every numeric option is an input box, not a slider.
+- The options page keeps only polling, write safety and the Bluetooth link; the inverter's own settings are controls
+  under **Configuration** on the device page.
+- Every numeric option is an input box, not a slider (also the `read_registers` count field).
 - README: tidier page, HACS default install.
 
 ## 1.1.0

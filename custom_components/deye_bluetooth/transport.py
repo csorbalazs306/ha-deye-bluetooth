@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
+from itertools import product
 
 from bleak import BleakClient
 from bleak.backends.device import BLEDevice
@@ -54,15 +56,40 @@ class Link:
             raise LinkError(f"connect failed: {exc}") from exc
         self._client = client
         try:
-            await client.start_notify(self._notify_char, self._on_notify)
-            if not p.is_handshake(await self._command(b"AT+DTYPE\n")):
-                raise LinkError("unexpected handshake reply")
+            await self._open_console(client)
         except LinkError:
             await self.close()  # a held link would lock the logger out
             raise
         except Exception as exc:  # noqa: BLE001 — start_notify raises many kinds
             await self.close()
             raise LinkError(f"setup failed: {exc}") from exc
+
+    async def _open_console(self, client: BleakClient) -> None:
+        """The configured characteristics; if the logger lacks them, whichever pair answers the handshake."""
+        chars = [char for service in client.services for char in service.characteristics]
+        if {self._write_char.lower(), self._notify_char.lower()} <= {char.uuid for char in chars}:
+            await self._handshake(client, self._write_char, self._notify_char)
+            return
+        writers = [char.uuid for char in chars if "write" in char.properties]  # the console needs a write with response
+        notifiers = [char.uuid for char in chars if "notify" in char.properties]
+        for write_char, notify_char in product(writers, notifiers):
+            try:
+                await self._handshake(client, write_char, notify_char)
+            except Exception:  # noqa: BLE001 — not the console, or the link dropped (checked below)
+                if self._client is None:
+                    raise LinkError("link dropped") from None
+                with suppress(Exception):
+                    await client.stop_notify(notify_char)
+                continue
+            _LOGGER.warning("Deye BLE console found on write %s, notify %s, not the configured ones", write_char, notify_char)
+            return
+        raise LinkError(f"no console: none of {len(writers)} write and {len(notifiers)} notify characteristics answered")
+
+    async def _handshake(self, client: BleakClient, write_char: str, notify_char: str) -> None:
+        self._write_char, self._notify_char = write_char, notify_char
+        await client.start_notify(notify_char, self._on_notify)
+        if not p.is_handshake(await self._command(b"AT+DTYPE\n")):
+            raise LinkError("unexpected handshake reply")
 
     async def close(self) -> None:
         client, self._client = self._client, None
