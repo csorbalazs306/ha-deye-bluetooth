@@ -7,7 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak, async_discovered_service_info
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import selector
@@ -58,7 +58,7 @@ class DeyeBluetoothConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
-    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlow:
+    def async_get_options_flow(entry: ConfigEntry) -> OptionsFlowWithReload:
         return DeyeBluetoothOptionsFlow()
 
 
@@ -113,7 +113,13 @@ def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
     return {}
 
 
-class DeyeBluetoothOptionsFlow(OptionsFlow):
+class DeyeBluetoothOptionsFlow(OptionsFlowWithReload):
+    """Saving the options reloads the entry, so the link and the poll intervals take the new values.
+
+    OptionsFlowWithReload does the reload; the entry has no update listener (Home Assistant refuses both), so a
+    change of the title alone does not reload.
+    """
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         current: Mapping[str, Any] = self.config_entry.options
         errors: dict[str, str] = {}

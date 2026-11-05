@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.1
+
+- **New installs get fewer entities:** the 113 `sensor.deye_inverter_<key>` sensors that repeat a control or a summary
+  sensor are disabled by default. Enable one on the device page if you need it. Existing entities are not changed.
+- A write reads back only the poll blocks it touched instead of all 26, and the grid-charge switch asks for one poll
+  instead of two. A side effect of a write on another register now shows at that register's next scheduled poll.
+- After a failed connection the polls wait 2, 4, 8 ... up to 60 s before connecting again, so a failing logger no longer
+  competes with the phone app every second. A logger out of range is still looked for at every poll, and the actions
+  do not wait.
+- A register the inverter refuses no longer drops the link: `read_registers` and the writes fail with the inverter's
+  answer and the link stays up, and a refused write is not retried.
+- The characteristic search gives each pair at most 2 s, saves the pair it finds in the options so it runs once, and a
+  failed search no longer leaves the last tried pair as the configured one.
+- Settings entities are written after a settings poll instead of every 15 s, unless their availability changes, and
+  availability is no longer recomputed for every entity every second.
+- Grid voltages are read every 15 s instead of every second (their entities were already written every 15 s), registers
+  601-603 are no longer read, and load frequency no longer takes its own read.
+- `sensor.deye_inverter_work_mode_name` is `unavailable` instead of `unknown` while its register is missing.
+- The actions use Home Assistant's own entry lookup: its error texts apply, and with several loggers configured
+  `config_entry_id` is required even if only one of them is loaded.
+- Renaming an entry no longer reloads it; saving the options still does.
+
 ## 1.3.0
 
 - A logger without the configured write or notify characteristic is no longer a dead end: the pair that answers the

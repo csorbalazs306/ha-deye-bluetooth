@@ -31,9 +31,5 @@ class SettingNumber(ControlEntity, NumberEntity):
             return r.rated_power(self.regs) or r.DEFAULT_RATED_W
         return self._high
 
-    @property
-    def native_value(self):
-        return r.decode_value(self._value, self.regs)
-
     async def async_set_native_value(self, value: float) -> None:
         await self._write(r.encode_value(self._value, value))

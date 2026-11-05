@@ -28,7 +28,7 @@ class GridSensor(DeyeEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.POWER
 
     def __init__(self, coordinator: DeyeCoordinator) -> None:
-        super().__init__(coordinator, "deye_grid", "binary_sensor.deye_grid")
+        super().__init__(coordinator, "deye_grid", "binary_sensor", "_grid")
 
     @property
     def available(self) -> bool:

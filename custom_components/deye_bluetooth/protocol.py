@@ -29,8 +29,11 @@ class LinkError(Exception):
     """No link, no reply, or a reply that makes no sense."""
 
 
-class RegisterRejected(LinkError):
-    """The inverter answered, and refused: the link itself is fine."""
+class RegisterRejected(Exception):
+    """The inverter answered with a Modbus exception: the link is fine, the register refused the request.
+
+    Not a LinkError: a refusal is never a reason to reconnect or to retry the write.
+    """
 
 
 def crc16(data: bytes) -> bytes:

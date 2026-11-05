@@ -25,10 +25,10 @@ class ProgramTime(ControlEntity, TimeEntity):
 
     @property
     def native_value(self) -> time | None:
-        raw = self.regs.get(self._value.reg)
-        if raw is None or raw // 100 > 23 or raw % 100 > 59:
+        hhmm = r.decode_hhmm(self.regs.get(self._value.reg))
+        if hhmm is None or hhmm[0] > 23 or hhmm[1] > 59:  # the range is checked here, not in the decoding
             return None
-        return time(raw // 100, raw % 100)
+        return time(*hhmm)
 
     async def async_set_value(self, value: time) -> None:
-        await self._write(value.hour * 100 + value.minute)
+        await self._write(r.encode_hhmm(value.hour, value.minute))

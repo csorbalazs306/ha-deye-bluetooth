@@ -5,9 +5,9 @@ Verified on a SUN-15K-SG05LP3-EU-SM2; other models are untested.
 Holding registers of the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
 ha-solarman ``deye_p3`` profile), decimal.  32-bit values are low word first.
 
-Three poll groups: LIVE every second (grid phases, load), FAST every scan
-(15 s: battery, PV, inverter, energy counters), SLOW every settings interval
-(identity, battery and Time-of-Use settings).  Every block
+Three poll groups: LIVE every second (grid powers and currents, load), FAST every
+scan (15 s: grid voltages, battery, PV, inverter, energy counters), SLOW every
+settings interval (identity, battery and Time-of-Use settings).  Every block
 is at most 16 registers: the logger does not answer longer reads.
 
 Kept free of Home Assistant imports so the tests run without it.
@@ -19,18 +19,18 @@ from dataclasses import dataclass
 
 # every live interval (1 s): the fast-moving grid and load values
 LIVE: list[tuple[int, int]] = [
-    (598, 15),  # grid voltages, CT powers, grid power, frequency, CT currents
-    (650, 4),   # load powers per phase and total
+    (604, 9),   # grid powers per phase and total, grid frequency, grid currents
+    (650, 6),   # load powers per phase and total, load frequency
 ]
 FAST: list[tuple[int, int]] = [
     (514, 16),  # daily / total battery, grid, load energy; daily PV
     (534, 8),   # total PV, DC / AC temperature
     (552, 7),   # relay status, warning and fault words
     (586, 9),   # battery temperature, voltage, SoC, power, corrected capacity, current
+    (598, 3),   # grid voltages L1-L3 (not live: nothing needs them every second)
     (613, 13),  # external CT currents and powers, power factor, grid side powers
     (627, 12),  # inverter output voltages, currents, powers, frequency
     (640, 10),  # UPS power, load voltages
-    (654, 2),   # load frequency
     (661, 7),   # generator port voltages and powers
     (672, 12),  # PV1-4 power, voltage and current
 ]
@@ -50,6 +50,8 @@ SLOW: list[tuple[int, int]] = [
     (340, 2),   # PV power limit, MPPT scanning
     (500, 1),   # device state
 ]
+# every register a SLOW block reads: the settings and identity, written only after a settings poll
+SLOW_REGS = frozenset(reg for start, count in SLOW for reg in range(start, start + count))
 
 DEVICES = {
     0: "unknown", 2: "string inverter", 0x200: "string inverter",
@@ -170,6 +172,7 @@ VALUES: list[Value] = [
     Value("grid_charge_current", "Grid charge current", 128, "A"),
     Value("grid_charge", "Grid charge enabled", 130),
     Value("work_mode", "Work mode", 142),
+    Value("work_mode_name", "Work mode name", 142, options=WORK_MODES),  # the same register, as text
     Value("max_sell_power", "Max sell power", 143, "W"),
     Value("solar_sell", "Solar sell", 145),
     Value("time_of_use", "Time of use", 146),
@@ -284,7 +287,7 @@ BY_KEY = {v.key: v for v in VALUES}
 # what the device page can change: every setting of the map, with the dangerous ones.  Left out: readings,
 # identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
 # register, they do not protect anything.  A maximum is a number or RATED (what the inverter reports).
-# A "word" is the raw register, bit fields included.
+# _WORD is the whole 16-bit register: the raw words (bit fields included) and the values with no tighter range.
 class _RatedPower:
     """Sentinel: use the inverter's own rated power (registers 20/21)."""
 
@@ -309,7 +312,7 @@ NUMBERS: dict[str, tuple[float, float | _RatedPower, float]] = {  # key: (min, m
     **{f"program_{i}_soc": _SOC for i in range(1, 7)},
     **{f"program_{i}_voltage": _BATTERY_V for i in range(1, 7)},
     # battery chemistry and voltages
-    "battery_capacity": (0, 0xFFFF, 1),
+    "battery_capacity": _WORD,
     "battery_equalization_voltage": _BATTERY_V,
     "battery_absorption_voltage": _BATTERY_V,
     "battery_float_voltage": _BATTERY_V,
@@ -320,7 +323,7 @@ NUMBERS: dict[str, tuple[float, float | _RatedPower, float]] = {  # key: (min, m
     "battery_equalization_cycle": (0, 365, 1),
     "battery_equalization_time": (0, 24, 0.5),
     "battery_temperature_compensation": (-100, 100, 1),
-    "battery_resistance": (0, 0xFFFF, 1),
+    "battery_resistance": _WORD,
     "battery_charge_efficiency": (0, 100, 0.1),
     "battery_shutdown_soc": _SOC,
     "battery_restart_soc": _SOC,
@@ -342,12 +345,12 @@ NUMBERS: dict[str, tuple[float, float | _RatedPower, float]] = {  # key: (min, m
     "grid_protection_voltage_low": (0, 500, 0.1),
     "grid_protection_frequency_high": (0, 100, 0.01),
     "grid_protection_frequency_low": (0, 100, 0.01),
-    "grid_reconnection_time": (0, 0xFFFF, 1),
+    "grid_reconnection_time": _WORD,
     "grid_peak_shaving_power": _POWER,
     "grid_max_export_power": (0, 655350, 10),
     "grid_max_import_power": (0, 655350, 10),
-    "pv_power_limit": (0, 0xFFFF, 1),
-    "self_check_time": (0, 0xFFFF, 1),
+    "pv_power_limit": _WORD,
+    "self_check_time": _WORD,
     # raw words
     "generator_charge": _WORD,
     "generator_flag": _WORD,
@@ -359,18 +362,17 @@ NUMBERS: dict[str, tuple[float, float | _RatedPower, float]] = {  # key: (min, m
     "mppt_scanning": _WORD,
 }
 SELECTS: dict[str, dict[int, str]] = {
-    "energy_pattern": ENERGY_PATTERNS,
+    # these Values have no options: giving them some would change their detail sensors
     "work_mode": WORK_MODES,
     "time_of_use": {0: "disabled", 0xFF: "all week", 0x3F: "weekdays", 0xC1: "weekend"},
     **{f"program_{i}_charge": {0: "disabled", 1: "grid", 2: "generator", 3: "both"} for i in range(1, 7)},
-    "battery_control_mode": BATTERY_CONTROL,
-    "battery_operation_mode": BATTERY_OPERATION,
-    "bms_type": BMS_TYPES,
-    "io_mode": IO_MODES,
-    "grid_voltage_setting": GRID_VOLTAGES,
-    "grid_frequency_setting": GRID_FREQUENCIES,
-    "charging_signal": CHARGING_SIGNALS,
-    "self_check": ON_OFF,
+    **{
+        key: BY_KEY[key].options
+        for key in (
+            "energy_pattern", "battery_control_mode", "battery_operation_mode", "bms_type", "io_mode",
+            "grid_voltage_setting", "grid_frequency_setting", "charging_signal", "self_check",
+        )
+    },
 }
 TIMES = [f"program_{i}_time" for i in range(1, 7)]
 ON_OFF_SWITCHES = ["solar_sell"]
@@ -382,7 +384,6 @@ SERIAL_REG, SERIAL_WORDS = 3, 5
 ALARM_REGS = range(553, 559)
 DEVICE_TYPE_REG = BY_KEY["device_type"].reg
 STATE = Value("state", "State", 500, options=STATES)
-WORK_MODE_NAME = Value("work_mode_name", "Work mode name", BY_KEY["work_mode"].reg, options=WORK_MODES)
 VERIFIED_DEVICE_TYPES = {5, 0x500}  # LV 3-phase hybrid
 
 
@@ -405,6 +406,17 @@ def _decode_clock(regs: dict[int, int]) -> str | None:
     return f"20{a >> 8:02d}-{a & 0xFF:02d}-{b >> 8:02d} {b & 0xFF:02d}:{c >> 8:02d}:{c & 0xFF:02d}"
 
 
+def decode_hhmm(raw: int | None) -> tuple[int, int] | None:
+    """A time register (HHMM) as (hour, minute).  Not validated: 2460 is (24, 60); the time entity refuses it."""
+    if raw is None:
+        return None
+    return raw // 100, raw % 100
+
+
+def encode_hhmm(hour: int, minute: int) -> int:
+    return hour * 100 + minute
+
+
 def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     """The value from the register words, None while a word is missing."""
     if v.fmt == "clock":
@@ -413,7 +425,8 @@ def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     if low is None:
         return None
     if v.fmt == "time":
-        return f"{low // 100:02d}:{low % 100:02d}"
+        hour, minute = decode_hhmm(low)
+        return f"{hour:02d}:{minute:02d}"
     if v.fmt == "hex":
         return f"{low:04X}"
     if v.options is not None:
