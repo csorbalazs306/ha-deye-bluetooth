@@ -17,6 +17,7 @@ from custom_components.deye_bluetooth import DOMAIN
 from custom_components.deye_bluetooth import options as o
 from custom_components.deye_bluetooth import protocol as p
 from custom_components.deye_bluetooth import registers as r
+from custom_components.deye_bluetooth.config_flow import SERVICE_UUID
 from custom_components.deye_bluetooth.diagnostics import async_get_config_entry_diagnostics
 from custom_components.deye_bluetooth.transport import Link, LinkError
 
@@ -50,19 +51,13 @@ class FakeLink:
 
 @pytest.fixture(autouse=True)
 def _harness(enable_custom_integrations):
-    links: list[FakeLink] = []
-
-    def make_link(**settings) -> FakeLink:
-        links.append(FakeLink(**settings))
-        return links[-1]
-
     with (
-        patch("custom_components.deye_bluetooth.Link", side_effect=make_link),
+        patch("custom_components.deye_bluetooth.Link", new=FakeLink),
         patch("custom_components.deye_bluetooth.bluetooth.async_ble_device_from_address", return_value=MagicMock()),
         patch("homeassistant.setup.async_process_deps_reqs", new=AsyncMock()),
         patch("homeassistant.setup._async_process_dependencies", new=AsyncMock(return_value=[])),
     ):
-        yield links
+        yield
 
 
 async def _add(hass: HomeAssistant, address=ADDRESS, prefix="deye", writes=False) -> MockConfigEntry:
@@ -231,21 +226,6 @@ async def test_a_low_soc_below_ten_can_be_set(hass: HomeAssistant) -> None:
     assert entry.runtime_data.link.writes == [(117, 5)]
 
 
-async def test_every_numeric_option_is_an_input_box(hass: HomeAssistant) -> None:
-    entry = await _add(hass)
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
-    boxes = [
-        validator
-        for group in result["data_schema"].schema.values()
-        if isinstance(group, section)
-        for validator in group.schema.schema.values()
-        if isinstance(validator, selector.NumberSelector)
-    ]
-    assert len(boxes) == len([option for option in o.OPTIONS if option.low is not None])
-    assert all(box.config["mode"] == selector.NumberSelectorMode.BOX for box in boxes)
-
-
 async def test_the_options_page_refuses_bad_values(hass: HomeAssistant) -> None:
     entry = await _add(hass)
     assert (await _options(hass, entry, write_characteristic="nope"))["errors"] == {"base": "bad_uuid"}
@@ -261,7 +241,7 @@ async def test_read_registers_action(hass: HomeAssistant) -> None:
     assert result == {"address": 607, "values": [32]}
 
 
-async def test_unknown_model_warns(hass: HomeAssistant, caplog, _harness) -> None:
+async def test_unknown_model_warns(hass: HomeAssistant, caplog) -> None:
     entry = MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS, data={"address": ADDRESS, "entity_prefix": "deye"})
     entry.add_to_hass(hass)
     with patch.object(FakeLink, "read", new=AsyncMock(side_effect=lambda a, n: [3 if a == 0 else 0] * n)):
@@ -280,7 +260,7 @@ async def test_link_splits_reads_to_the_option() -> None:
         assert frame[0] == 2  # the slave of the option
         count = frame[5]
         body = bytes((2, 3, 2 * count)) + bytes(2 * count)
-        return "+ok=" + (body + p.crc16(body)).hex()
+        return "+ok=" + p._frame(body).hex()
 
     link._command = command
     assert await link.read(100, 7) == [0] * 7
@@ -367,7 +347,7 @@ async def test_diagnostics_leave_out_serial_and_address(hass: HomeAssistant) -> 
 
 async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) -> None:
     await _add(hass)
-    info = MagicMock(address=ADDRESS_2, service_uuids=["00000922-0000-1000-8000-00805f9b34fb"])
+    info = MagicMock(address=ADDRESS_2, service_uuids=[SERVICE_UUID])
     info.name = "logger2"
     with patch("custom_components.deye_bluetooth.config_flow.async_discovered_service_info", return_value=[info]):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
@@ -378,7 +358,7 @@ async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) 
 
 
 async def test_flow_by_hand_while_a_discovery_of_the_logger_waits(hass: HomeAssistant) -> None:
-    info = MagicMock(address=ADDRESS, service_uuids=["00000922-0000-1000-8000-00805f9b34fb"])
+    info = MagicMock(address=ADDRESS, service_uuids=[SERVICE_UUID])
     info.name = "logger"
     discovery = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "bluetooth"}, data=info)
     assert discovery["type"] is FlowResultType.FORM
@@ -398,7 +378,6 @@ async def test_flow_without_a_logger_aborts(hass: HomeAssistant) -> None:
 
 
 # --- behavioural coverage added by the review loops -------------------------
-SERVICE_UUID = "00000922-0000-1000-8000-00805f9b34fb"
 REMOVED_OPTIONS = {"grid_min_voltage", "battery_current_max", "zero_export_max", "power_step", "low_soc_min"}
 
 

@@ -14,6 +14,7 @@ Kept free of Home Assistant imports so the tests run without it.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 # every live interval (1 s): the fast-moving grid and load values
@@ -172,8 +173,8 @@ VALUES: list[Value] = [
     Value("max_sell_power", "Max sell power", 143, "W"),
     Value("solar_sell", "Solar sell", 145),
     Value("time_of_use", "Time of use", 146),
-    *[Value(f"program_{i}_soc", f"Program {i} SoC", 165 + i, "%") for i in range(1, 7)],
-    *[Value(f"program_{i}_charge", f"Program {i} charge", 171 + i) for i in range(1, 7)],
+    *_programs("soc", "SoC", 166, "%"),
+    *_programs("charge", "charge", 172),
     # the rest of the map: the addresses, scales and texts of ha-solarman's deye_p3
     # identity
     Value("device_type", "Device type", 0, options=DEVICES),
@@ -282,7 +283,7 @@ BY_KEY = {v.key: v for v in VALUES}
 
 # what the device page can change: every setting of the map, with the dangerous ones.  Left out: readings,
 # identity, the clock (three registers) and the Modbus address (a new one ends the link).  The ranges fit the
-# register, they do not protect anything.  A limit is a number or RATED (what the inverter reports).
+# register, they do not protect anything.  A maximum is a number or RATED (what the inverter reports).
 # A "word" is the raw register, bit fields included.
 class _RatedPower:
     """Sentinel: use the inverter's own rated power (registers 20/21)."""
@@ -296,7 +297,7 @@ _WORD = (0, 0xFFFF, 1)
 _AMPS = (0, 2000, 1)
 _POWER = (0, RATED, 100)
 _HOURS = (0, 24, 0.1)
-NUMBERS: dict[str, tuple[float | _RatedPower, float | _RatedPower, float]] = {  # key: (min, max, step)
+NUMBERS: dict[str, tuple[float, float | _RatedPower, float]] = {  # key: (min, max, step)
     "max_sell_power": _POWER,
     "zero_export_power": (0, 10000, 1),
     "battery_max_charge_current": _AMPS,
@@ -374,11 +375,14 @@ SELECTS: dict[str, dict[int, str]] = {
 TIMES = [f"program_{i}_time" for i in range(1, 7)]
 ON_OFF_SWITCHES = ["solar_sell"]
 
-PROGRAM_CHARGE = 172  # six consecutive registers
-REG_GRID_CHARGE = 130
+PROGRAM_CHARGE = BY_KEY["program_1_charge"].reg  # six consecutive registers
+REG_GRID_CHARGE = BY_KEY["grid_charge"].reg
+REG_RELAY = BY_KEY["relay_status"].reg
 SERIAL_REG, SERIAL_WORDS = 3, 5
 ALARM_REGS = range(553, 559)
-DEVICE_TYPE_REG = 0
+DEVICE_TYPE_REG = BY_KEY["device_type"].reg
+STATE = Value("state", "State", 500, options=STATES)
+WORK_MODE_NAME = Value("work_mode_name", "Work mode name", BY_KEY["work_mode"].reg, options=WORK_MODES)
 VERIFIED_DEVICE_TYPES = {5, 0x500}  # LV 3-phase hybrid
 
 
@@ -386,10 +390,16 @@ def _signed(raw: int) -> int:
     return raw - 0x10000 if raw >= 0x8000 else raw
 
 
+def _words(regs: dict[int, int], addresses: Iterable[int]) -> list[int] | None:
+    """These registers' words, None while one is missing."""
+    words = [regs.get(reg) for reg in addresses]
+    return None if None in words else words
+
+
 def _decode_clock(regs: dict[int, int]) -> str | None:
     """Registers 62-64: year, month / day, hour / minute, second, one byte each."""
-    words = [regs.get(reg) for reg in (62, 63, 64)]
-    if any(w is None for w in words):
+    words = _words(regs, (62, 63, 64))
+    if words is None:
         return None
     a, b, c = words
     return f"20{a >> 8:02d}-{a & 0xFF:02d}-{b >> 8:02d} {b & 0xFF:02d}:{c >> 8:02d}:{c & 0xFF:02d}"
@@ -431,8 +441,8 @@ def encode_value(v: Value, value: float) -> int:
 
 
 def decode_serial(regs: dict[int, int]) -> str | None:
-    words = [regs.get(SERIAL_REG + i) for i in range(SERIAL_WORDS)]
-    if any(w is None for w in words):
+    words = _words(regs, range(SERIAL_REG, SERIAL_REG + SERIAL_WORDS))
+    if words is None:
         return None
     text = b"".join(w.to_bytes(2, "big") for w in words).decode("ascii", "replace")
     return text.strip("\x00 ") or None
@@ -443,8 +453,8 @@ FIRMWARE = {"main": (14, 15, 11), "hmi": (17, 18), "protocol": (2,)}
 
 
 def decode_firmware(regs: dict[int, int], part: str) -> str | None:
-    words = [regs.get(reg) for reg in FIRMWARE[part]]
-    return None if any(w is None for w in words) else "-".join(f"{w:04X}" for w in words)
+    words = _words(regs, FIRMWARE[part])
+    return None if words is None else "-".join(f"{w:04X}" for w in words)
 
 
 def rated_power(regs: dict[int, int]) -> float | None:

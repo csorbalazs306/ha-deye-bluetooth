@@ -33,8 +33,8 @@ from time import monotonic  # not "import time": this package's time.py would re
 import voluptuous as vol
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
+from homeassistant.const import ATTR_CONFIG_ENTRY_ID, CONF_ADDRESS, Platform
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
@@ -43,44 +43,45 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from . import options as o
 from . import registers as r
-from .protocol import MODBUS_MAX_READ
-from .transport import Link, LinkError, RegisterRejected
+from .protocol import MODBUS_MAX_READ, LinkError, RegisterRejected
+from .transport import Link
 
 DOMAIN = "deye_bluetooth"
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH, Platform.NUMBER, Platform.SELECT, Platform.TIME]
-CONF_ADDRESS = "address"
 CONF_PREFIX = "entity_prefix"
-CONF_ENTRY = "config_entry_id"
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+_WORD_VALUE = vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))
 WRITE_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
+        vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+        vol.Required("address"): _WORD_VALUE,
         vol.Required("value"): vol.Any(
-            vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
-            vol.All(cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))], vol.Length(min=1, max=16)),
+            _WORD_VALUE,
+            vol.All(cv.ensure_list, [_WORD_VALUE], vol.Length(min=1, max=16)),
         ),
     }
 )
 READ_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_ENTRY): cv.string,
-        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF)),
+        vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
+        vol.Required("address"): _WORD_VALUE,
         vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=MODBUS_MAX_READ)),
     }
 )
+_SLOW_STARTS = frozenset(start for start, _ in r.SLOW)
 
 
 class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     """The data: {register: word} of every fresh block."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._options = {**o.DEFAULTS, **entry.options}  # any change of the options reloads the entry
         super().__init__(
             hass, _LOGGER, config_entry=entry, name=DOMAIN,
-            update_interval=timedelta(seconds=entry.options.get(o.LIVE_S, o.DEFAULTS[o.LIVE_S])),
+            update_interval=timedelta(seconds=self._options[o.LIVE_S]),
         )
         self.address: str = entry.data[CONF_ADDRESS]
         self.prefix: str = entry.data[CONF_PREFIX]
@@ -99,8 +100,8 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.last_error = ""
 
     def option(self, key: str):
-        """What the options page says, or its default (stale keys keep their value)."""
-        return self.config_entry.options[key] if key in self.config_entry.options else o.DEFAULTS[key]
+        """What the options page says, or its default."""
+        return self._options[key]
 
     @property
     def writes_allowed(self) -> bool:
@@ -151,7 +152,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         return data
 
     def _fresh(self, start: int) -> bool:
-        stale = self.option(o.SETTINGS_STALE_S) if any(start == s for s, _ in r.SLOW) else self.option(o.STALE_S)
+        stale = self.option(o.SETTINGS_STALE_S if start in _SLOW_STARTS else o.STALE_S)
         at, _ = self.blocks[start]
         return monotonic() - at < stale
 
@@ -210,11 +211,10 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
             return
 
 
-@callback
 def _coordinator(hass: HomeAssistant, call: ServiceCall) -> DeyeCoordinator:
     """The logger the action names; it may be left out while there is only one."""
     entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    wanted = call.data.get(CONF_ENTRY)
+    wanted = call.data.get(ATTR_CONFIG_ENTRY_ID)
     if wanted is not None:
         entries = [entry for entry in entries if entry.entry_id == wanted]
         if not entries:
@@ -222,7 +222,7 @@ def _coordinator(hass: HomeAssistant, call: ServiceCall) -> DeyeCoordinator:
     if not entries:
         raise ServiceValidationError("Deye Bluetooth: no logger is loaded")
     if len(entries) > 1:
-        raise ServiceValidationError(f"Deye Bluetooth: several loggers, set {CONF_ENTRY}")
+        raise ServiceValidationError(f"Deye Bluetooth: several loggers, set {ATTR_CONFIG_ENTRY_ID}")
     return entries[0].runtime_data
 
 
@@ -253,7 +253,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = DeyeCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
-    device_type = coordinator.registers().get(r.DEVICE_TYPE_REG)
+    device_type = coordinator.data.get(r.DEVICE_TYPE_REG)
     if device_type is not None and device_type not in r.VERIFIED_DEVICE_TYPES:
         _LOGGER.warning(
             "Deye Bluetooth: device type 0x%X is not verified, its register map may differ; "

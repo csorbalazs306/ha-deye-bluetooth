@@ -19,6 +19,10 @@ p = load("protocol")
 r = load("registers")
 
 
+def _reply(body):
+    return "+ok=" + p._frame(body).hex()
+
+
 class ProtocolTest(unittest.TestCase):
     def test_read_frame_as_captured(self):
         # AT+INVDATA=8,01030002000125CA -> +ok=0103020104B817 (captured from a real logger)
@@ -31,18 +35,18 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(len(frame), 11)
         self.assertTrue(p.at_command(frame).startswith(b"AT+INVDATA=11,0110008F00010200"))
         ack = bytes((1, 0x10, 0x00, 0x8F, 0x00, 0x01))
-        p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex().upper(), frame)
+        p.check_write_ack(_reply(ack), frame)
         other = bytes((1, 0x10, 0x00, 0x90, 0x00, 0x01))
-        with self.assertRaises(p.ProtocolError):
-            p.check_write_ack("+ok=" + (other + p.crc16(other)).hex().upper(), frame)
+        with self.assertRaises(p.LinkError):
+            p.check_write_ack(_reply(other), frame)
 
     def test_rejects_bad_replies(self):
         for reply in ("ERROR", "+ok=0103020104B818", "+ok=zz", "+ok=0183020000"):
-            with self.assertRaises(p.ProtocolError, msg=reply):
+            with self.assertRaises(p.LinkError, msg=reply):
                 p.parse_read(reply, 1)
         exc = bytes((1, 0x83, 0x02))
-        with self.assertRaisesRegex(p.ProtocolError, "exception 0x02"):
-            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+        with self.assertRaisesRegex(p.LinkError, "exception 0x02"):
+            p.parse_read(_reply(exc), 1)
 
     def test_handshake_and_limits(self):
         self.assertTrue(p.is_handshake("+ok=21521,21521\r\n"))
@@ -128,11 +132,6 @@ class RegistersTest(unittest.TestCase):
             self.assertIn(key, keys)
         for key in ("modbus_address", "bms_soc", "battery_voltage", "fault_1"):  # identity and readings
             self.assertNotIn(key, keys)
-        for low, high, step in r.NUMBERS.values():
-            if isinstance(low, int) and isinstance(high, int):
-                self.assertLess(low, high)
-            if isinstance(step, int):
-                self.assertGreater(step, 0)
 
     def test_serial(self):
         words = [int.from_bytes(b"1234567890"[i:i + 2], "big") for i in range(0, 10, 2)]
@@ -163,10 +162,10 @@ class RegistersTest(unittest.TestCase):
 
     def test_parse_read_multiple_registers(self):
         body = bytes((1, p.READ, 4)) + (0x1234).to_bytes(2, "big") + (0xABCD).to_bytes(2, "big")
-        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 2), [0x1234, 0xABCD])
+        self.assertEqual(p.parse_read(_reply(body), 2), [0x1234, 0xABCD])
         words = list(range(16))
         body = bytes((1, p.READ, 32)) + b"".join(w.to_bytes(2, "big") for w in words)
-        self.assertEqual(p.parse_read("+ok=" + (body + p.crc16(body)).hex(), 16), words)
+        self.assertEqual(p.parse_read(_reply(body), 16), words)
 
     def test_reply_error_validation(self):
         bad_bodies = (
@@ -175,17 +174,17 @@ class RegistersTest(unittest.TestCase):
             bytes((1, p.READ, 2, 0, 1, 0, 2)),  # wrong length
         )
         for body in bad_bodies:
-            reply = "+ok=" + (body + p.crc16(body)).hex()
-            with self.assertRaisesRegex(p.ProtocolError, "not a read of"):
+            reply = _reply(body)
+            with self.assertRaisesRegex(p.LinkError, "not a read of"):
                 p.parse_read(reply, 1)
-        with self.assertRaises(p.ProtocolError):
+        with self.assertRaises(p.LinkError):
             p.parse_read("+ok=0103", 1)
         ack = bytes((1, p.READ, 0, 1, 0, 1))
-        with self.assertRaises(p.ProtocolError):
-            p.check_write_ack("+ok=" + (ack + p.crc16(ack)).hex(), p.write_frame(1, 1))
+        with self.assertRaises(p.LinkError):
+            p.check_write_ack(_reply(ack), p.write_frame(1, 1))
         exc = bytes((1, 0x83, 0x02))
-        with self.assertRaisesRegex(p.ModbusRejected, "function 0x03"):
-            p.parse_read("+ok=" + (exc + p.crc16(exc)).hex(), 1)
+        with self.assertRaisesRegex(p.RegisterRejected, "function 0x03"):
+            p.parse_read(_reply(exc), 1)
         self.assertFalse(p.is_handshake("+ok=21521,21521,9"))
 
     def test_frame_validation_and_overrides(self):

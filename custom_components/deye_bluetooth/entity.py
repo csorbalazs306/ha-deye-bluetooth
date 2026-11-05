@@ -91,6 +91,7 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
 
     _attr_has_entity_name = True
     live = False
+    _was_available: bool | None = None
 
     def __init__(self, coordinator: DeyeCoordinator, key: str, entity_id: str) -> None:
         super().__init__(coordinator)
@@ -102,19 +103,19 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
             identifiers={(DOMAIN, entry.unique_id)},
             name=f"Deye inverter{coordinator.prefix.removeprefix('deye').replace('_', ' ')}",
             manufacturer="Deye",
-            model=r.device_model(coordinator.registers()),
-            serial_number=r.decode_serial(coordinator.registers()),
+            model=r.device_model(coordinator.data),
+            serial_number=r.decode_serial(coordinator.data),
         )
 
     def _handle_coordinator_update(self) -> None:
         available = self.available
-        if self.live or self.coordinator.full_poll or available != getattr(self, "_was_available", None):
+        if self.live or self.coordinator.full_poll or available != self._was_available:
             self._was_available = available
             super()._handle_coordinator_update()
 
     @property
     def regs(self) -> dict[int, int]:
-        return self.coordinator.data or {}
+        return self.coordinator.data
 
 
 class ControlEntity(DeyeEntity):

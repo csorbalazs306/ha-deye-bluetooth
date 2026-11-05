@@ -76,7 +76,7 @@ class _IntBox(selector.NumberSelector):
 
 
 def _validator(option: o.Option):
-    if option.low is not None and option.high is not None:
+    if option.low is not None:
         # plain vol.Range serialises to a number selector with min+max, whose
         # default mode is "slider"; an explicit box keeps every field editable
         return _IntBox(
@@ -106,14 +106,10 @@ def _schema(current: Mapping[str, Any]) -> vol.Schema:
 
 
 def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
-    chars = (flat.get(o.WRITE_CHAR), flat.get(o.NOTIFY_CHAR))
-    if not all(isinstance(char, str) and _UUID.fullmatch(char) for char in chars):
+    if not (_UUID.fullmatch(flat[o.WRITE_CHAR]) and _UUID.fullmatch(flat[o.NOTIFY_CHAR])):
         return {"base": "bad_uuid"}
-    try:
-        if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
-            return {"base": "stale_too_short"}  # values would go unavailable between two polls
-    except (KeyError, TypeError):
-        return {"base": "stale_too_short"}
+    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
+        return {"base": "stale_too_short"}  # values would go unavailable between two polls
     return {}
 
 

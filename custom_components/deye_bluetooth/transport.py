@@ -16,16 +16,9 @@ from bleak.backends.device import BLEDevice
 from bleak_retry_connector import establish_connection
 
 from . import protocol as p
+from .protocol import LinkError
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class LinkError(Exception):
-    """No link, no reply, or a reply that makes no sense."""
-
-
-class RegisterRejected(LinkError):
-    """The inverter refused these registers; the link is fine."""
 
 
 class Link:
@@ -135,18 +128,8 @@ class Link:
 
     async def _read(self, address: int, count: int) -> list[int]:
         frame = p.read_frame(address, count, self._slave, self._max_read)
-        reply = await self._command(p.at_command(frame))
-        try:
-            return p.parse_read(reply, count)
-        except p.ModbusRejected as exc:
-            raise RegisterRejected(str(exc)) from exc
-        except p.ProtocolError as exc:
-            raise LinkError(str(exc)) from exc
+        return p.parse_read(await self._command(p.at_command(frame)), count)
 
     async def write(self, address: int, value: int) -> None:
         frame = p.write_frame(address, value, self._slave)
-        reply = await self._command(p.at_command(frame))
-        try:
-            p.check_write_ack(reply, frame)
-        except p.ProtocolError as exc:
-            raise LinkError(str(exc)) from exc
+        p.check_write_ack(await self._command(p.at_command(frame)), frame)
