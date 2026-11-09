@@ -20,6 +20,7 @@ SCAN_S = "scan_interval"
 SETTINGS_S = "settings_interval"
 STALE_S = "stale_after"
 SETTINGS_STALE_S = "settings_stale_after"
+ALERT_S = "link_alert_after"
 WRITES = "allow_writes"
 WRITE_ATTEMPTS = "write_attempts"
 SLAVE = "modbus_slave"
@@ -45,6 +46,7 @@ OPTIONS = (
     Option(SETTINGS_S, POLLING, 300, 60, 3600),
     Option(STALE_S, POLLING, 120, 10, 3600),
     Option(SETTINGS_STALE_S, POLLING, 900, 60, 86400),
+    Option(ALERT_S, POLLING, 300, 0, 86400),  # 0: no alert
     Option(WRITES, CONTROL, False),
     Option(WRITE_ATTEMPTS, CONTROL, 3, 1, 10),
     Option(SLAVE, LINK, p.SLAVE, 1, 247),

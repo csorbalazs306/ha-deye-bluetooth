@@ -108,7 +108,7 @@ def _schema(current: Mapping[str, Any]) -> vol.Schema:
 def _errors(flat: Mapping[str, Any]) -> dict[str, str]:
     if not (_UUID.fullmatch(flat[o.WRITE_CHAR]) and _UUID.fullmatch(flat[o.NOTIFY_CHAR])):
         return {"base": "bad_uuid"}
-    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
+    if flat[o.STALE_S] < flat[o.SCAN_S] or flat[o.STALE_S] < flat[o.LIVE_S] or flat[o.SETTINGS_STALE_S] < flat[o.SETTINGS_S]:
         return {"base": "stale_too_short"}  # values would go unavailable between two polls
     return {}
 

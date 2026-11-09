@@ -104,7 +104,11 @@ class Link:
         except Exception:  # noqa: BLE001 — best effort, never blocks the caller
             _LOGGER.debug("Deye BLE disconnect did not finish cleanly", exc_info=True)
 
-    def _on_disconnect(self, _client: BleakClient) -> None:
+    def _on_disconnect(self, client: BleakClient) -> None:
+        # close() gives a replaced client reply_timeout to finish disconnecting: its late callback must not clear the new
+        # one.  With no client (close() during a command) it still fails the reply that is waiting.
+        if self._client is not None and client is not self._client:
+            return
         self._client = None
         if self._reply is not None and not self._reply.done():
             self._reply.set_exception(LinkError("link dropped"))

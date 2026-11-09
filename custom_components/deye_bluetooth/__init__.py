@@ -24,6 +24,10 @@ off until the "Allow writes" option is on; each written register is read back an
 mismatch is an error.  Only changed registers are written (EEPROM).  The next poll
 reads again the poll blocks a write touched.  After a failed connection the polls wait
 2, 4, ... up to 60 s before they connect again; the read and write actions do not wait.
+
+When the logger has not answered for the "Alert after" option, a Repairs issue says so.  The
+logger has no pairing or password and takes one connection at a time, so a long silence can
+also mean that another device in Bluetooth range holds it.
 """
 from __future__ import annotations
 
@@ -41,11 +45,13 @@ from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_CONFIG_ENTRY_ID, CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.service import async_get_config_entry, async_register_admin_service
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util.hass_dict import HassKey
 
 from . import options as o
 from . import registers as r
@@ -59,6 +65,9 @@ CONF_PREFIX = "entity_prefix"
 _LOGGER = logging.getLogger(__name__)
 
 MAX_BACKOFF_S = 60  # the wait after a failed connection is 2 ** failures seconds, at most this
+# entry_id -> monotonic of the first poll the logger did not answer.  In hass.data, not on the coordinator: a setup
+# retry builds a new coordinator, and a logger that never answers must still raise the issue.
+DOWN_SINCE: HassKey[dict[str, float]] = HassKey(f"{DOMAIN}_down_since")
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 _WORD_VALUE = vol.All(vol.Coerce(int), vol.Range(min=0, max=0xFFFF))
 WRITE_SCHEMA = vol.Schema(
@@ -110,6 +119,16 @@ def _blocks_at(register: int) -> list[int]:
     return [start for start, (count, _) in _BLOCKS.items() if start <= register < start + count]
 
 
+def _issue_id(entry_id: str) -> str:
+    return f"link_down_{entry_id}"
+
+
+def _forget_link(hass: HomeAssistant, entry_id: str) -> None:
+    """No alert for an entry that does not poll: unloaded or removed."""
+    hass.data.get(DOWN_SINCE, {}).pop(entry_id, None)
+    ir.async_delete_issue(hass, DOMAIN, _issue_id(entry_id))
+
+
 class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     """The data: {register: word} of every fresh block."""
 
@@ -136,6 +155,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         self.full_poll = True  # the last update read a FAST block
         self.slow_poll = True  # the last update read a SLOW block
         self.failures = 0
+        self._link_failures = 0  # the backoff's exponent: out-of-range polls never tried to connect, so they do not count
         self.last_error = ""
 
     def option(self, key: str):
@@ -215,6 +235,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
     async def _async_update_data(self) -> dict[int, int]:
         async with self.lock:
             self.full_poll = self.slow_poll = False
+            polled = False
             try:
                 polled = await self._poll()
             except LinkError as exc:
@@ -222,16 +243,39 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 self.last_error = str(exc)
                 await self.link.close()
                 if not isinstance(exc, _OutOfRange):
-                    self._retry_at = monotonic() + min(2 ** min(self.failures, 6), MAX_BACKOFF_S)
+                    self._link_failures += 1
+                    self._retry_at = monotonic() + min(2 ** min(self._link_failures, 6), MAX_BACKOFF_S)
                 _LOGGER.debug("Deye BLE poll failed (%d in a row): %s", self.failures, exc)
             else:
                 if polled:
                     self.failures, self.last_error, self._retry_at = 0, "", -inf
+                    self._link_failures = 0
+            self._watch_link(polled)
         self.fresh_blocks = frozenset(start for start in self.blocks if self._fresh(start))
         data = self.registers()
         if not any(start in self.fresh_blocks for start, _ in LIVE_GROUP.blocks + FAST_GROUP.blocks):
             raise UpdateFailed(f"no fresh data ({self.last_error or 'no reply'})")
         return data
+
+    def _watch_link(self, answered: bool) -> None:
+        """The Repairs issue while the logger has not answered for the alert option (0: never); gone once it does.
+
+        A poll waiting out its backoff did not reach the logger either: it counts as unanswered.
+        """
+        entry = self.config_entry
+        down = self.hass.data.setdefault(DOWN_SINCE, {})
+        if answered:
+            if down.pop(entry.entry_id, None) is not None:
+                ir.async_delete_issue(self.hass, DOMAIN, _issue_id(entry.entry_id))
+            return
+        since = down.setdefault(entry.entry_id, monotonic())
+        after = self.option(o.ALERT_S)
+        if after and monotonic() - since >= after:
+            ir.async_create_issue(  # the same arguments again change nothing: no event, no save
+                self.hass, DOMAIN, _issue_id(entry.entry_id),
+                is_fixable=False, severity=ir.IssueSeverity.WARNING, translation_key="link_down",
+                translation_placeholders={"name": entry.title, "minutes": f"{round(after / 60, 1):g}"},
+            )
 
     def _fresh(self, start: int) -> bool:
         at, _ = self.blocks[start]
@@ -275,6 +319,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         """
         if not self.writes_allowed:
             raise HomeAssistantError("Deye Bluetooth: writes are off (integration options → Allow writes)")
+        written = False
         async with self._session(f"write to {address}"):
             current = await self.link.read(address, len(values))
             for i, value in enumerate(values):
@@ -284,7 +329,9 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                     await self._write_verified(address + i, value)
                 finally:  # attempted, so possibly changed even if it failed: its block is read again
                     self._pending.update(_blocks_at(address + i))
-        _LOGGER.info("Deye Bluetooth: wrote %s to register %d", values, address)
+                written = True
+        if written:
+            _LOGGER.info("Deye Bluetooth: wrote %s to register %d", values, address)
         if refresh:
             await self.async_request_refresh()
 
@@ -316,14 +363,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _check_range(start: int, count: int) -> None:
+    """A range past the last address cannot be sent: refused before the link is used."""
+    if start + count > 0x10000:
+        raise ServiceValidationError(f"registers {start} to {start + count - 1} run past the last address, 65535")
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def write_register(call: ServiceCall) -> None:
         value = call.data["value"]
+        values = value if isinstance(value, list) else [value]
+        _check_range(call.data["address"], len(values))
         coordinator = async_get_config_entry(hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID)).runtime_data
-        await coordinator.write(call.data["address"], value if isinstance(value, list) else [value])
+        await coordinator.write(call.data["address"], values)
 
     async def read_registers(call: ServiceCall) -> ServiceResponse:
         start, count = call.data["address"], call.data["count"]
+        _check_range(start, count)
         coordinator = async_get_config_entry(hass, DOMAIN, call.data.get(ATTR_CONFIG_ENTRY_ID)).runtime_data
         return {"address": start, "values": await coordinator.read(start, count)}
 
@@ -351,4 +407,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok:
         await entry.runtime_data.link.close()
+        _forget_link(hass, entry.entry_id)
     return ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Also for an entry removed while its setup was retrying, which is not unloaded."""
+    _forget_link(hass, entry.entry_id)
