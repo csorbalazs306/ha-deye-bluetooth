@@ -76,6 +76,7 @@ options page (the integration's **Configure** button); every inverter and batter
 | | Poll interval (everything else) | 15 s |
 | | Settings interval | 300 s |
 | | Values / settings go unavailable after | 120 s / 900 s |
+| | Alert after no answer (a Repairs issue; 0 = off) | 300 s |
 | Writing | Allow writes | off |
 | | Write attempts | 3 |
 | Bluetooth link | Modbus address | 1 |
@@ -178,6 +179,11 @@ may need a qualified electrician or your grid operator's approval.
 - **Keeps dropping**: move the adapter or a proxy closer. Weak signal is the usual cause. After a failed connection the
   polls wait 2, 4, 8 … up to 60 s before they connect again; a logger that is out of range is looked for at every poll.
   Reads and writes from the actions do not wait.
+- **"Not answering over Bluetooth" in Repairs**: the logger has not answered for the *Alert after no answer* option
+  (5 min by default). Close the Deye app and check the signal first. The logger has no pairing or password and takes one
+  connection at a time, so if neither helps, another device in range may hold it: it can read and change the
+  inverter's settings while it does. Restarting the logger drops that connection. The issue goes away by itself once
+  the logger answers.
 - **A register is refused**: the inverter answered with a Modbus exception. The action fails with that message and the
   link stays up; the values of that block age out as usual.
 - **Grid-charge switch fails**: turn on *Allow writes*.

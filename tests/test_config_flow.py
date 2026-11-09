@@ -50,6 +50,12 @@ async def test_the_options_page_refuses_bad_values(hass: HomeAssistant) -> None:
     assert entry.options.get("write_characteristic") is None
 
 
+async def test_a_stale_limit_shorter_than_the_live_interval_is_refused(hass: HomeAssistant) -> None:
+    entry = await _add(hass)
+    result = await _options(hass, entry, stale_after=10, scan_interval=10, live_interval=15)
+    assert result["errors"] == {"base": "stale_too_short"}  # the live values would be unavailable between two reads
+
+
 async def test_flow_gives_the_second_logger_its_own_prefix(hass: HomeAssistant) -> None:
     await _add(hass)
     info = MagicMock(address=ADDRESS_2, service_uuids=[SERVICE_UUID])
@@ -86,11 +92,11 @@ async def test_flow_without_a_logger_aborts(hass: HomeAssistant) -> None:
 REMOVED_OPTIONS = {"grid_min_voltage", "battery_current_max", "zero_export_max", "power_step", "low_soc_min"}
 
 
-def test_defaults_match_the_thirteen_options():
-    assert len(o.OPTIONS) == 13
+def test_defaults_match_the_fourteen_options():
+    assert len(o.OPTIONS) == 14
     assert o.SECTIONS == {o.POLLING: False, o.CONTROL: False, o.LINK: True}
     assert o.DEFAULTS == {
-        o.LIVE_S: 1, o.SCAN_S: 15, o.SETTINGS_S: 300, o.STALE_S: 120, o.SETTINGS_STALE_S: 900,
+        o.LIVE_S: 1, o.SCAN_S: 15, o.SETTINGS_S: 300, o.STALE_S: 120, o.SETTINGS_STALE_S: 900, o.ALERT_S: 300,
         o.WRITES: False, o.WRITE_ATTEMPTS: 3, o.SLAVE: p.SLAVE, o.MAX_READ: p.MAX_READ,
         o.REPLY_TIMEOUT: 10, o.CONNECT_ATTEMPTS: 3, o.WRITE_CHAR: p.WRITE_CHAR, o.NOTIFY_CHAR: p.NOTIFY_CHAR,
     }

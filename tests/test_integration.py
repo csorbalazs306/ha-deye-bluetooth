@@ -362,3 +362,18 @@ async def test_the_work_mode_name_is_unavailable_while_its_register_is_missing(h
     _age(entry.runtime_data, 130, 10_000)  # the block that holds register 142 is no longer fresh
     await _refresh(hass, entry.runtime_data)
     assert hass.states.get("sensor.deye_inverter_work_mode_name").state == "unavailable"  # not "unknown"
+
+
+async def test_a_register_range_past_the_last_address_is_refused_before_the_link(hass: HomeAssistant) -> None:
+    entry = await _add(hass, writes=True)
+    with pytest.raises(ServiceValidationError, match="past the last address"):
+        await hass.services.async_call(
+            DOMAIN, "read_registers", {"address": 65530, "count": 20}, blocking=True, return_response=True
+        )
+    with pytest.raises(ServiceValidationError, match="past the last address"):
+        await hass.services.async_call(DOMAIN, "write_register", {"address": 65535, "value": [1, 2]}, blocking=True)
+    assert entry.runtime_data.link.writes == []
+    result = await hass.services.async_call(
+        DOMAIN, "read_registers", {"address": 65535, "count": 1}, blocking=True, return_response=True
+    )
+    assert result == {"address": 65535, "values": [0]}

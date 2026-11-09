@@ -31,13 +31,15 @@
               "scan_interval": "Poll interval (s)",
               "settings_interval": "Settings interval (s)",
               "stale_after": "Values go unavailable after (s)",
-              "settings_stale_after": "Settings go unavailable after (s)"
+              "settings_stale_after": "Settings go unavailable after (s)",
+              "link_alert_after": "Alert after no answer for (s)"
             },
             "data_description": {
               "live_interval": "Grid currents and powers, and the load. Each change is a recorder row.",
               "scan_interval": "Grid voltages, battery, PV, inverter, energy counters.",
               "settings_interval": "Identity and settings registers.",
-              "stale_after": "Older values are unavailable, so nothing acts on them."
+              "stale_after": "Older values are unavailable, so nothing acts on them.",
+              "link_alert_after": "A Repairs issue when the logger has not answered this long; 0 turns it off. The logger has no pairing or password, so a long silence can also mean another device holds it."
             }
           },
           "control": {
@@ -69,6 +71,12 @@
           }
         }
       }
+    }
+  },
+  "issues": {
+    "link_down": {
+      "title": "{name} is not answering over Bluetooth",
+      "description": "Home Assistant has not reached **{name}** for {minutes} min, so its values are unavailable.\n\nThe logger takes one Bluetooth connection at a time and has no pairing or password. Check:\n\n1. **The Deye phone app:** close it. While it is connected, the logger answers nothing else.\n2. **The signal:** move the Bluetooth adapter or proxy closer to the logger.\n3. **Another device:** if neither, something else in Bluetooth range may hold the logger, and it can read and change the inverter's settings. Restarting the logger drops that connection.\n\nThis goes away by itself once the logger answers. The delay is the *Alert after no answer* option; 0 turns the alert off."
     }
   },
   "services": {

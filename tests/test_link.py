@@ -131,3 +131,20 @@ async def test_a_handshake_failure_on_the_configured_pair_does_not_start_a_searc
     with pytest.raises(LinkError):
         await _connect(gatt)
     assert gatt.written == [p.WRITE_CHAR]
+
+
+async def test_a_late_disconnect_of_a_replaced_connection_leaves_the_new_one_alone() -> None:
+    chars = {p.WRITE_CHAR: ["write"], p.NOTIFY_CHAR: ["notify"]}
+    first, second = _FakeGatt(chars, (p.WRITE_CHAR, p.NOTIFY_CHAR)), _FakeGatt(chars, (p.WRITE_CHAR, p.NOTIFY_CHAR))
+    link = _new_link()
+    with patch("custom_components.deye_bluetooth.transport.establish_connection", new=AsyncMock(return_value=first)) as dial:
+        await link.connect(MagicMock())
+    first_callback = dial.call_args.kwargs["disconnected_callback"]
+    with patch("custom_components.deye_bluetooth.transport.establish_connection", new=AsyncMock(return_value=second)) as dial:
+        await link.connect(MagicMock())
+    second_callback = dial.call_args.kwargs["disconnected_callback"]
+
+    first_callback(first)  # the replaced client finishing its disconnect in the background
+    assert link.connected
+    second_callback(second)
+    assert not link.connected

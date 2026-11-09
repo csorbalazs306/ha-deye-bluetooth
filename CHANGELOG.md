@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.0
+
+- **Alert when the logger stops answering:** after 5 min without an answer a Repairs issue appears, and it goes away by
+  itself once the logger answers. The logger has no pairing or password and takes one connection at a time, so besides
+  the phone app and a weak signal, a long silence can mean that another device in Bluetooth range holds it. The delay
+  is the new *Alert after no answer* option in the Polling section; 0 turns the alert off. It also works for a logger
+  that never answered since Home Assistant started.
+- A late disconnect of a replaced connection no longer leaves the new connection open but unused. The logger takes one
+  connection, so that leftover one blocked the next poll.
+- The `read_registers` and `write_register` actions refuse a register range past 65535 with a clear error, not an
+  internal one.
+- After the logger was out of range, the first failed connection waits 2 s again, not up to 60 s.
+- The options page refuses a *Values go unavailable after* shorter than the live interval, which made the live values
+  unavailable between polls.
+
 ## 1.3.1
 
 - **New installs get fewer entities:** the 113 `sensor.deye_inverter_<key>` sensors that repeat a control or a summary
