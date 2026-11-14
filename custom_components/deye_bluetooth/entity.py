@@ -77,7 +77,7 @@ SUMMARY_SENSORS: list[SummarySensor] = [
     ],
     _summary("deye_grid_power", "Grid power", "grid_power", live=True),
     _summary("deye_load_power", "Load power", "load_power", unit="kW", scale=0.001, live=True),
-    SummarySensor("deye_pv_power", "PV power", r.pv_power, "W", POWER),  # the sum of four registers: no source
+    SummarySensor("deye_pv_power", "PV power", r.pv_power, "W", POWER, live=True),  # the sum of the four live PV powers
     _summary("deye_pv1_power", "PV1 power", "pv1_power"),
     _summary("deye_pv2_power", "PV2 power", "pv2_power"),
     _summary("deye_battery_soc", "Battery SoC", "battery_soc", classes=(SensorDeviceClass.BATTERY, SensorStateClass.MEASUREMENT)),

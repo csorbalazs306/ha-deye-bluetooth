@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0
+
+- **Battery and PV powers every second:** the battery SoC and power and the PV1-4 powers moved from the 15 s poll into
+  the live poll, next to the grid and load, so a power flow card follows all of them every second: `sensor.deye_pv_power`, `deye_pv1_power`, `deye_pv2_power`,
+  `deye_battery_power` and `deye_battery_soc` are written every live interval, like the grid and load sensors. The
+  `sensor.deye_inverter_<key>` detail sensors stay on the 15 s poll (each written state is a recorder row). Battery
+  voltage, current and temperature and the PV voltages and currents stay on the 15 s poll.
+
 ## 1.4.0
 
 - **Alert when the logger stops answering:** after 5 min without an answer a Repairs issue appears, and it goes away by
