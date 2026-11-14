@@ -5,8 +5,9 @@ Verified on a SUN-15K-SG05LP3-EU-SM2; other models are untested.
 Holding registers of the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
 ha-solarman ``deye_p3`` profile), decimal.  32-bit values are low word first.
 
-Three poll groups: LIVE every second (grid powers and currents, load), FAST every
-scan (15 s: grid voltages, battery, PV, inverter, energy counters), SLOW every
+Three poll groups: LIVE every second (grid powers and currents, load, battery
+SoC and power, PV powers), FAST every scan (15 s: grid voltages, the rest of the
+battery and PV, inverter, energy counters), SLOW every
 settings interval (identity, battery and Time-of-Use settings).  Every block
 is at most 16 registers: the logger does not answer longer reads.
 
@@ -17,22 +18,26 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-# every live interval (1 s): the fast-moving grid and load values
+# every live interval (1 s): the fast-moving powers of a power flow — grid, load,
+# battery and PV
 LIVE: list[tuple[int, int]] = [
+    (588, 3),   # battery SoC, power
     (604, 9),   # grid powers per phase and total, grid frequency, grid currents
     (650, 6),   # load powers per phase and total, load frequency
+    (672, 4),   # PV1-4 power
 ]
 FAST: list[tuple[int, int]] = [
     (514, 16),  # daily / total battery, grid, load energy; daily PV
     (534, 8),   # total PV, DC / AC temperature
     (552, 7),   # relay status, warning and fault words
-    (586, 9),   # battery temperature, voltage, SoC, power, corrected capacity, current
+    (586, 2),   # battery temperature, voltage
+    (591, 4),   # battery corrected capacity, current
     (598, 3),   # grid voltages L1-L3 (not live: nothing needs them every second)
     (613, 13),  # external CT currents and powers, power factor, grid side powers
     (627, 12),  # inverter output voltages, currents, powers, frequency
     (640, 10),  # UPS power, load voltages
     (661, 7),   # generator port voltages and powers
-    (672, 12),  # PV1-4 power, voltage and current
+    (676, 8),   # PV1-4 voltage and current
 ]
 SLOW: list[tuple[int, int]] = [
     (0, 8),     # device type, Modbus address, protocol version, inverter serial (ASCII)
@@ -50,6 +55,8 @@ SLOW: list[tuple[int, int]] = [
     (340, 2),   # PV power limit, MPPT scanning
     (500, 1),   # device state
 ]
+# every register a LIVE block reads: a summary sensor of one of them is written every live interval
+LIVE_REGS = frozenset(reg for start, count in LIVE for reg in range(start, start + count))
 # every register a SLOW block reads: the settings and identity, written only after a settings poll
 SLOW_REGS = frozenset(reg for start, count in SLOW for reg in range(start, start + count))
 

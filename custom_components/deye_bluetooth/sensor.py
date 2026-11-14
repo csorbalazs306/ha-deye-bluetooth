@@ -41,7 +41,8 @@ class SummaryValueSensor(ValueAvailable, DeyeEntity, SensorEntity):
     def __init__(self, coordinator: DeyeCoordinator, desc: SummarySensor) -> None:
         super().__init__(coordinator, desc.object_id, "sensor", desc.object_id.removeprefix("deye"))
         self._desc = desc
-        self.live = desc.live
+        # a value from a live register is written every live interval, like the ones marked live
+        self.live = desc.live or (desc.source is not None and r.BY_KEY[desc.source].reg in r.LIVE_REGS)
         self.settings = desc.source is not None and r.BY_KEY[desc.source].reg in r.SLOW_REGS
         self._attr_name = desc.name
         self._attr_native_unit_of_measurement = desc.unit

@@ -134,9 +134,15 @@ class RegistersTest(unittest.TestCase):
         for key in ("modbus_address", "bms_soc", "battery_voltage", "fault_1"):  # identity and readings
             self.assertNotIn(key, keys)
 
+    def test_the_live_blocks_hold_the_power_flow(self):
+        live = {start + i for start, count in r.LIVE for i in range(count)}
+        for key in ("battery_soc", "battery_power", *(f"pv{n}_power" for n in (1, 2, 3, 4))):
+            self.assertIn(r.BY_KEY[key].reg, live, key)
+        self.assertEqual(r.LIVE_REGS, frozenset(live))
+
     def test_the_live_and_fast_blocks_as_measured(self):
         # grid voltages are not live: nothing needs them every second, and they read with the 15 s poll
-        self.assertEqual(r.LIVE, [(604, 9), (650, 6)])
+        self.assertEqual(r.LIVE, [(588, 3), (604, 9), (650, 6), (672, 4)])
         self.assertIn((598, 3), r.FAST)
         self.assertNotIn((654, 2), r.FAST)
         polled = {start + i for start, count in r.LIVE + r.FAST + r.SLOW for i in range(count)}

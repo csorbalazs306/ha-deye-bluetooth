@@ -25,6 +25,19 @@ async def test_entities_and_model(hass: HomeAssistant) -> None:
     assert hass.states.get("number.deye_inverter_max_sell_power").attributes["max"] == 5000
 
 
+async def test_battery_and_pv_powers_follow_the_live_poll(hass: HomeAssistant) -> None:
+    entry = await _add(hass)
+    link, coordinator = entry.runtime_data.link, entry.runtime_data
+    link.regs[590] = 1234  # battery power, W
+    link.regs[672], link.regs[673] = 1500, 700  # PV1, PV2 power, W
+    await coordinator.async_refresh()  # a live poll: the 15 s blocks are not due
+    await hass.async_block_till_done()
+    assert not coordinator.full_poll
+    assert hass.states.get("sensor.deye_battery_power").state == "1234"
+    assert hass.states.get("sensor.deye_pv1_power").state == "1500"
+    assert hass.states.get("sensor.deye_pv_power").state == "2200"
+
+
 async def test_first_poll_reads_everything_right_after_a_host_reboot(hass: HomeAssistant) -> None:
     with patch("custom_components.deye_bluetooth.monotonic", return_value=30.0):
         await _add(hass)
@@ -240,7 +253,7 @@ async def test_a_write_rereads_only_the_blocks_it_touched(hass: HomeAssistant, c
     await hass.async_block_till_done()
     assert link.writes == [(145, 1)]
     # the write's own read and read-back, then the next poll: the live blocks and the one block of register 145
-    assert link.reads == [(145, 1), (145, 1), (604, 9), (650, 6), (130, 16)]
+    assert link.reads == [(145, 1), (145, 1), (588, 3), (604, 9), (650, 6), (672, 4), (130, 16)]
 
 
 async def test_a_write_to_no_poll_block_needs_no_reread(hass: HomeAssistant, clock) -> None:
@@ -250,7 +263,7 @@ async def test_a_write_to_no_poll_block_needs_no_reread(hass: HomeAssistant, clo
     await hass.services.async_call(DOMAIN, "write_register", {"address": 601, "value": 7}, blocking=True)
     await hass.async_block_till_done()
     assert link.writes == [(601, 7)]
-    assert link.reads == [(601, 1), (601, 1), (604, 9), (650, 6)]  # 601 is in no poll block
+    assert link.reads == [(601, 1), (601, 1), (588, 3), (604, 9), (650, 6), (672, 4)]  # 601 is in no poll block
 
 
 async def test_a_write_that_fails_midway_leaves_its_blocks_for_the_next_poll(hass: HomeAssistant, clock) -> None:
@@ -266,10 +279,10 @@ async def test_a_write_that_fails_midway_leaves_its_blocks_for_the_next_poll(has
     link.reads.clear()
     await _refresh(hass, coordinator)
     # the blocks of both registers the write reached, and nothing else of the settings
-    assert link.reads == [(604, 9), (650, 6), (146, 16), (162, 16)]
+    assert link.reads == [(588, 3), (604, 9), (650, 6), (672, 4), (146, 16), (162, 16)]
     link.reads.clear()
     await _refresh(hass, coordinator)
-    assert link.reads == [(604, 9), (650, 6)]  # read once, then cleared
+    assert link.reads == [(588, 3), (604, 9), (650, 6), (672, 4)]  # read once, then cleared
 
 
 async def test_a_pending_fast_block_is_shown_on_the_next_poll(hass: HomeAssistant, clock) -> None:
