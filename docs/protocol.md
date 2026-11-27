@@ -23,7 +23,11 @@ Frames are hex, slave 1, CRC-16/Modbus low byte first.
 - A Modbus exception reply (the inverter refuses a register) is an answer: the link stays up. Only a missing or
   garbled reply is a link error, which drops the link.
 
-The register map follows the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
-[ha-solarman](https://github.com/davidrapan/ha-solarman) `deye_p3` profile).
-Scales and addresses are in
-[`registers.py`](../custom_components/deye_bluetooth/registers.py).
+There are two register maps. On the first connection the integration reads register 0, the device type, and picks one:
+
+- device type 3 (single-phase hybrid, SUN-*K-SG0*LP1): the [ha-solarman](https://github.com/davidrapan/ha-solarman)
+  `deye_hybrid` profile (Deye MODBUS RTU V118);
+- anything else: the Deye 3-phase LV hybrid map (MODBUS RTU V105, the ha-solarman `deye_p3` profile).
+
+Scales and addresses are in [`registers.py`](../custom_components/deye_bluetooth/registers.py). The diagnostics
+download names the map in use (`register_map`).

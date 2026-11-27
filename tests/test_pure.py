@@ -323,3 +323,73 @@ class RegistersTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SinglePhaseMapTest(unittest.TestCase):
+    """The single-phase hybrid map (ha-solarman deye_hybrid), checked against the registers of issue 11."""
+
+    m = r.SINGLE_PHASE
+
+    def test_map_for_device_type(self):
+        self.assertIs(r.map_for(3), r.SINGLE_PHASE)
+        self.assertIs(r.map_for(0x300), r.SINGLE_PHASE)
+        for kind in (5, 0x500, 6, 2, 0, None):
+            self.assertIs(r.map_for(kind), r.THREE_PHASE)
+
+    def test_three_phase_map_is_the_module_names(self):
+        t = r.THREE_PHASE
+        self.assertEqual((t.live, t.fast, t.slow, t.values), (r.LIVE, r.FAST, r.SLOW, r.VALUES))
+        self.assertEqual((t.program_charge, t.grid_charge_reg, t.relay_reg), (r.PROGRAM_CHARGE, r.REG_GRID_CHARGE, r.REG_RELAY))
+        self.assertEqual((t.live_regs, t.slow_regs), (r.LIVE_REGS, r.SLOW_REGS))
+
+    def test_every_value_is_polled_and_blocks_fit(self):
+        for m in (r.THREE_PHASE, r.SINGLE_PHASE):
+            blocks = m.live + m.fast + m.slow
+            self.assertTrue(all(1 <= count <= 16 for _, count in blocks), m.name)
+            self.assertEqual(len({start for start, _ in blocks}), len(blocks), m.name)
+            polled = {reg for start, count in blocks for reg in range(start, start + count)}
+            self.assertEqual(len(m.by_key), len(m.values), f"{m.name}: duplicate keys")
+            for v in m.values:
+                needed = {v.reg}
+                if v.words == 2:
+                    needed.add(v.reg + 1 if v.high is None else v.high)
+                if v.fmt == "clock":
+                    needed |= {v.reg + 1, v.reg + 2}
+                self.assertLessEqual(needed, polled, f"{m.name}: {v.key}")
+            self.assertLessEqual(set(m.numbers) | set(m.selects) | set(m.times) | set(m.on_off_switches), set(m.by_key))
+            self.assertLessEqual(set(m.firmware["main"]) | set(m.alarm_regs) | {m.state.reg, m.relay_reg}, polled)
+
+    def test_summary_keys_exist_on_both_maps(self):
+        for key in ("grid_power", "load_power", "battery_soc", "battery_power", "battery_capacity", "total_import",
+                    "total_export", "total_load", "total_pv", "program_1_soc", "solar_sell", "grid_current_l1",
+                    "grid_voltage_l1", "grid_power_l1", "pv1_power", "pv4_power", "grid_charge", "program_1_charge"):
+            self.assertIn(key, r.SINGLE_PHASE.by_key, key)
+            self.assertIn(key, r.THREE_PHASE.by_key, key)
+
+    def test_issue_11_registers(self):
+        regs = {0: 3, 2: 513, 10: 0, 11: 5398, 12: 0, 13: 21384, 14: 50050, 16: 14464, 17: 1, 18: 513, 21: 0,
+                109: 3280, 110: 6, 111: 3337, 112: 6, 150: 2371, 151: 0, 152: 2373, 169: 18, 175: 416, 178: 434,
+                182: 1250, 183: 1120, 184: 0, 186: 210, 187: 214, 188: 0, 189: 0, 210: 40, 211: 120, 213: 2,
+                216: 990, 217: 20, 218: 50, 219: 35, 220: 4600, 222: 4750, 236: 5100, 237: 95}
+        d = lambda key: r.decode_value(self.m.by_key[key], regs)  # noqa: E731
+        self.assertEqual(r.rated_power(regs, self.m), 8000.0)
+        self.assertEqual(r.device_model(regs, self.m), "single-phase hybrid, 8 kW")
+        self.assertEqual((d("mppts"), d("phases")), (2, 1))
+        self.assertEqual((d("pv1_voltage"), d("pv1_current"), d("pv2_voltage")), (328.0, 0.6, 333.7))
+        self.assertEqual(r.pv_power(regs, self.m), 424)
+        self.assertEqual((d("grid_voltage_l1"), d("grid_voltage"), d("grid_power")), (237.1, 237.3, 18))
+        self.assertEqual((d("load_power"), d("inverter_power")), (434, 416))
+        self.assertEqual((d("battery_temperature"), d("battery_voltage"), d("battery_soc")), (25.0, 11.2, 0))
+        self.assertEqual((d("battery_max_charge_current"), d("battery_max_discharge_current")), (40, 120))
+        self.assertEqual(d("battery_operation_mode"), "no battery")
+        self.assertEqual((d("battery_charge_efficiency"), d("battery_shutdown_soc"), d("battery_low_soc")), (99.0, 20, 35))
+        self.assertEqual((d("battery_shutdown_voltage"), d("battery_low_voltage")), (46.0, 47.5))
+        self.assertEqual((d("smart_load_off_voltage"), d("smart_load_off_soc")), (51.0, 95))
+        self.assertEqual(r.decode_firmware(regs, "main", self.m), "5388-0000-1516")
+        self.assertEqual(r.decode_firmware(regs, "hmi", self.m), "C382-0000")
+
+    def test_split_high_word_and_clock(self):
+        self.assertEqual(r.decode_value(self.m.by_key["total_import"], {78: 1234, 80: 1}), 6677.0)
+        self.assertIsNone(r.decode_value(self.m.by_key["total_import"], {78: 1234, 79: 1}))
+        clock = {22: (26 << 8) | 11, 23: (27 << 8) | 14, 24: (5 << 8) | 9}
+        self.assertEqual(r.decode_value(self.m.by_key["inverter_clock"], clock), "2026-11-27 14:05:09")

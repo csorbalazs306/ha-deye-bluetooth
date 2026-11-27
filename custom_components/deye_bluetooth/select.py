@@ -1,4 +1,4 @@
-"""Dropdowns on the device page: the settings of registers.SELECTS."""
+"""Dropdowns on the device page: the settings of the register map's selects."""
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
@@ -7,14 +7,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import DeyeCoordinator
-from . import registers as r
 from .entity import ControlEntity
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities(SettingSelect(entry.runtime_data, key, options) for key, options in r.SELECTS.items())
+    coordinator = entry.runtime_data
+    async_add_entities(SettingSelect(coordinator, key, options) for key, options in coordinator.map.selects.items())
 
 
 class SettingSelect(ControlEntity, SelectEntity):

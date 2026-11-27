@@ -19,6 +19,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     return {
         "data": async_redact_data(dict(entry.data), TO_REDACT),
         "options": dict(entry.options),
+        "register_map": coordinator.map.name if coordinator.map else None,
         "poll_failures": coordinator.failures,
         "last_error": coordinator.last_error.replace(coordinator.address, REDACTED),
         "registers": {reg: word for reg, word in sorted(coordinator.registers().items()) if reg not in SERIAL_REGS},

@@ -3,7 +3,8 @@
 The logger (DYDA_WiBLE) has no local network port, but its Bluetooth console
 passes Modbus RTU through to the inverter (see protocol.py).  A Bluetooth adapter
 on the Home Assistant host (or an ESPHome Bluetooth proxy near the inverter) holds
-the link; this polls the register blocks of registers.py.
+the link; this polls the register blocks of registers.py: the 3-phase or the single-phase map, chosen
+by the device type the inverter reports in register 0 when the link first connects.
 
 Entities (the prefix is ``deye`` for the first logger, ``deye_2`` for the second, ...):
 - the summary: ``sensor.deye_grid_power``, ``sensor.deye_grid_phase_*``,
@@ -93,30 +94,28 @@ READ_SCHEMA = vol.Schema(
 class PollGroup:
     """Poll blocks read together: on every update (interval_key None) or on an option's interval.
 
-    stale_key is the option for how long their values stay fresh.
+    kind names the register map's blocks ("live", "fast", "slow"); stale_key is the option for how long their
+    values stay fresh.
     """
 
-    blocks: list[tuple[int, int]]
+    kind: str
     interval_key: str | None
     stale_key: str
 
+    def blocks(self, register_map: r.RegisterMap) -> list[tuple[int, int]]:
+        return getattr(register_map, self.kind)
+
 
 POLL_GROUPS = (
-    PollGroup(r.LIVE, None, o.STALE_S),
-    PollGroup(r.FAST, o.SCAN_S, o.STALE_S),
-    PollGroup(r.SLOW, o.SETTINGS_S, o.SETTINGS_STALE_S),
+    PollGroup("live", None, o.STALE_S),
+    PollGroup("fast", o.SCAN_S, o.STALE_S),
+    PollGroup("slow", o.SETTINGS_S, o.SETTINGS_STALE_S),
 )
 LIVE_GROUP, FAST_GROUP, SLOW_GROUP = POLL_GROUPS
-_BLOCKS = {start: (count, group) for group in POLL_GROUPS for start, count in group.blocks}  # start -> (count, group)
 
 
 class _OutOfRange(LinkError):
     """The logger is not in range: nothing was tried, so there is no backoff and the next poll looks again."""
-
-
-def _blocks_at(register: int) -> list[int]:
-    """The starts of the poll blocks that read this register."""
-    return [start for start, (count, _) in _BLOCKS.items() if start <= register < start + count]
 
 
 def _issue_id(entry_id: str) -> str:
@@ -146,6 +145,8 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
             connect_attempts=self.option(o.CONNECT_ATTEMPTS),
         )
         self.lock = asyncio.Lock()
+        self.map: r.RegisterMap | None = None  # known once the inverter has said its device type
+        self._poll_blocks: dict[int, tuple[int, PollGroup]] = {}  # start -> (count, group) of the map's poll blocks
         self.blocks: dict[int, tuple[float, list[int]]] = {}  # start -> (monotonic, words)
         self.fresh_blocks: frozenset[int] = frozenset()  # the starts of the blocks fresh at the last update
         # never read: monotonic() is the host's uptime, which can be below any interval
@@ -176,6 +177,25 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         await self.link.connect(device)
         if self.link.found_console is not None:
             self._remember_console(*self.link.found_console)
+        if self.map is None:
+            await self._detect_map()
+
+    async def _detect_map(self) -> None:
+        """The register map of the inverter's device type (register 0): one read, on the first connection."""
+        try:
+            (device_type,) = await self.link.read(r.DEVICE_TYPE_REG, 1)
+        except RegisterRejected as exc:  # an answer, but no type: the 3-phase map, as before
+            _LOGGER.debug("Deye Bluetooth: device type not readable: %s", exc)
+            device_type = None
+        self.map = r.map_for(device_type)
+        self._poll_blocks = {
+            start: (count, group) for group in POLL_GROUPS for start, count in group.blocks(self.map)
+        }
+        _LOGGER.debug("Deye Bluetooth: device type %s, the %s register map", device_type, self.map.name)
+
+    def _blocks_at(self, register: int) -> list[int]:
+        """The starts of the poll blocks that read this register."""
+        return [start for start, (count, _) in self._poll_blocks.items() if start <= register < start + count]
 
     def _remember_console(self, write_char: str, notify_char: str) -> None:
         """Keep the pair a scan found in the entry, so the next start does not scan again.
@@ -208,7 +228,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
         now = monotonic()
         due = [g for g in POLL_GROUPS if g.interval_key is None or now - self._read_at[g] >= self.option(g.interval_key)]
         blocks = [
-            (start, count) for group in POLL_GROUPS for start, count in group.blocks
+            (start, count) for start, (count, group) in self._poll_blocks.items()
             if group in due or start in self._pending
         ]
         await self._read_blocks(blocks)
@@ -226,7 +246,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
             else:
                 self.blocks[start] = (monotonic(), words)
             self._pending.discard(start)  # answered, even by a refusal: reading it again now would not change that
-            group = _BLOCKS[start][1]
+            group = self._poll_blocks[start][1]
             if group is FAST_GROUP:
                 self.full_poll = True
             elif group is SLOW_GROUP:
@@ -253,7 +273,8 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
             self._watch_link(polled)
         self.fresh_blocks = frozenset(start for start in self.blocks if self._fresh(start))
         data = self.registers()
-        if not any(start in self.fresh_blocks for start, _ in LIVE_GROUP.blocks + FAST_GROUP.blocks):
+        live_or_fast = (start for start, (_, group) in self._poll_blocks.items() if group is not SLOW_GROUP)
+        if not any(start in self.fresh_blocks for start in live_or_fast):
             raise UpdateFailed(f"no fresh data ({self.last_error or 'no reply'})")
         return data
 
@@ -279,7 +300,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
 
     def _fresh(self, start: int) -> bool:
         at, _ = self.blocks[start]
-        return monotonic() - at < self.option(_BLOCKS[start][1].stale_key)
+        return monotonic() - at < self.option(self._poll_blocks[start][1].stale_key)
 
     def registers(self) -> dict[int, int]:
         """The words of the fresh blocks only: a stale value is no value."""
@@ -328,7 +349,7 @@ class DeyeCoordinator(DataUpdateCoordinator[dict[int, int]]):
                 try:
                     await self._write_verified(address + i, value)
                 finally:  # attempted, so possibly changed even if it failed: its block is read again
-                    self._pending.update(_blocks_at(address + i))
+                    self._pending.update(self._blocks_at(address + i))
                 written = True
         if written:
             _LOGGER.info("Deye Bluetooth: wrote %s to register %d", values, address)
@@ -394,10 +415,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     device_type = coordinator.data.get(r.DEVICE_TYPE_REG)
-    if device_type is not None and device_type not in r.VERIFIED_DEVICE_TYPES:
+    if device_type is not None and (not coordinator.map.verified or (
+        coordinator.map is r.THREE_PHASE and device_type not in r.VERIFIED_DEVICE_TYPES
+    )):
         _LOGGER.warning(
-            "Deye Bluetooth: device type 0x%X is not verified, its register map may differ; "
-            "keep writes off until the values look right", device_type,
+            "Deye Bluetooth: device type 0x%X uses the %s register map, not verified on a logger yet; "
+            "keep writes off until the values look right", device_type, coordinator.map.name,
         )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

@@ -16,7 +16,8 @@ from .entity import ControlEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities(ProgramTime(entry.runtime_data, key) for key in r.TIMES)
+    coordinator = entry.runtime_data
+    async_add_entities(ProgramTime(coordinator, key) for key in coordinator.map.times)
 
 
 class ProgramTime(ControlEntity, TimeEntity):

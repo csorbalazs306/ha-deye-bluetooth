@@ -1,4 +1,4 @@
-"""Numbers on the device page: the settings of registers.NUMBERS."""
+"""Numbers on the device page: the settings of the register map's numbers."""
 from __future__ import annotations
 
 from homeassistant.components.number import NumberEntity, NumberMode
@@ -14,7 +14,8 @@ from .entity import ControlEntity
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
-    async_add_entities(SettingNumber(entry.runtime_data, key, limits) for key, limits in r.NUMBERS.items())
+    coordinator = entry.runtime_data
+    async_add_entities(SettingNumber(coordinator, key, limits) for key, limits in coordinator.map.numbers.items())
 
 
 class SettingNumber(ControlEntity, NumberEntity):
@@ -28,7 +29,7 @@ class SettingNumber(ControlEntity, NumberEntity):
     @property
     def native_max_value(self) -> float:
         if self._high is r.RATED:
-            return r.rated_power(self.regs) or r.DEFAULT_RATED_W
+            return r.rated_power(self.regs, self.coordinator.map) or r.DEFAULT_RATED_W
         return self._high
 
     async def async_set_native_value(self, value: float) -> None:

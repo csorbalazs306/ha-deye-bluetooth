@@ -7,6 +7,7 @@ import yaml
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -14,7 +15,18 @@ from custom_components.deye_bluetooth import DOMAIN, FAST_GROUP, SLOW_GROUP
 from custom_components.deye_bluetooth import options as o
 from custom_components.deye_bluetooth import registers as r
 from custom_components.deye_bluetooth.diagnostics import async_get_config_entry_diagnostics
-from tests.support import ADDRESS, ADDRESS_2, NOTIFY_UUID, WRITE_UUID, FakeLink, _add, _age, _due, _refresh
+from tests.support import (
+    ADDRESS,
+    ADDRESS_2,
+    NOTIFY_UUID,
+    SERIAL,
+    WRITE_UUID,
+    FakeLink,
+    _add,
+    _age,
+    _due,
+    _refresh,
+)
 
 
 async def test_entities_and_model(hass: HomeAssistant) -> None:
@@ -160,13 +172,78 @@ async def test_read_registers_action(hass: HomeAssistant) -> None:
     assert result == {"address": 607, "values": [32]}
 
 
-async def test_unknown_model_warns(hass: HomeAssistant, caplog) -> None:
+@pytest.mark.parametrize(("device_type", "map_name"), [(2, "3-phase"), (3, "single-phase")])
+async def test_unverified_model_warns(hass: HomeAssistant, caplog, device_type, map_name) -> None:
     entry = MockConfigEntry(domain=DOMAIN, unique_id=ADDRESS, data={"address": ADDRESS, "entity_prefix": "deye"})
     entry.add_to_hass(hass)
-    with patch.object(FakeLink, "read", new=AsyncMock(side_effect=lambda a, n: [3 if a == 0 else 0] * n)):
+    with patch.object(FakeLink, "read", new=AsyncMock(side_effect=lambda a, n: [device_type if a == 0 else 0] * n)):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
-    assert "is not verified" in caplog.text
+    assert f"uses the {map_name}" in caplog.text
+    assert "not verified" in caplog.text
+
+
+async def test_verified_model_does_not_warn(hass: HomeAssistant, caplog) -> None:
+    await _add(hass)
+    assert "not verified" not in caplog.text
+
+
+# registers of a SUN-8K-SG05LP1-AU (issue 11): 8 kW, two MPPTs, PV but no battery yet
+SINGLE_PHASE_REGS = {
+    0: 3, 16: 14464, 17: 1, 18: 513, 59: 2, 109: 3280, 110: 6, 150: 2373, 151: 0, 152: 2373, 169: 18,
+    167: 18, 160: 201, 178: 434, 175: 416, 184: 0, 186: 210, 187: 214, 190: 0, 194: 1, 204: 100, 219: 35,
+    232: 1, 245: 8000, 247: 1, 274: 1, 78: 1234, 80: 1, 79: 5002,
+}
+
+
+async def test_single_phase_map(hass: HomeAssistant) -> None:
+    with patch.object(FakeLink, "__init__", _single_phase_link):
+        entry = await _add(hass)
+    coordinator = entry.runtime_data
+    assert coordinator.map is r.SINGLE_PHASE
+    assert coordinator.link.reads[0] == (0, 1)  # the device type first, then the map's blocks
+    assert {start for start, _ in coordinator.link.reads[1:]} == {
+        start for start, _ in r.SINGLE_PHASE.live + r.SINGLE_PHASE.fast + r.SINGLE_PHASE.slow
+    }
+    state = hass.states.get
+    assert state("sensor.deye_grid_power").state == "18"
+    assert state("sensor.deye_load_power").state == "0.434"
+    assert state("sensor.deye_pv_power").state == "424"
+    assert state("sensor.deye_pv1_power").state == "210"
+    assert state("sensor.deye_grid_phase_a_voltage").state == "237.3"
+    assert state("sensor.deye_grid_phase_b_voltage") is None  # one phase: no B or C summary
+    assert state("sensor.deye_grid_import_energy").state == "6677.0"  # (1 << 16 | 1234) / 10, high word at 80
+    assert state("sensor.deye_inverter_grid_frequency").state == "50.02"
+    assert state("sensor.deye_inverter_state").state == "normal"
+    assert state("binary_sensor.deye_grid").state == "on"
+    assert state("switch.deye_grid_charge").state == "on"
+    assert state("switch.deye_inverter_solar_sell").state == "on"
+    assert state("number.deye_inverter_battery_low_soc").state == "35"
+    assert state("number.deye_inverter_max_sell_power").attributes["max"] == 8000
+    assert state("number.deye_inverter_grid_max_export_power") is None  # a 3-phase register
+    device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, ADDRESS), entry.entry_id)
+    assert device.model == "single-phase hybrid, 8 kW"
+    data = await async_get_config_entry_diagnostics(hass, entry)
+    assert data["register_map"] == r.SINGLE_PHASE.name
+
+
+async def test_single_phase_writes_its_own_registers(hass: HomeAssistant) -> None:
+    with patch.object(FakeLink, "__init__", _single_phase_link):
+        entry = await _add(hass, writes=True)
+    link = entry.runtime_data.link
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": "number.deye_inverter_battery_low_soc", "value": 40}, blocking=True
+    )
+    await hass.services.async_call("switch", "turn_off", {"entity_id": "switch.deye_grid_charge"}, blocking=True)
+    assert link.writes == [(219, 40), (274, 0), (232, 0)]
+
+
+def _single_phase_link(self, **settings) -> None:
+    _fake_link_init(self, **settings)
+    self.regs = {**SINGLE_PHASE_REGS, **SERIAL}
+
+
+_fake_link_init = FakeLink.__init__
 
 
 async def test_diagnostics_leave_out_serial_and_address(hass: HomeAssistant) -> None:

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.6.0
+
+- **Single-phase hybrids get their own register map** ([#11](https://github.com/csorbalazs306/ha-deye-bluetooth/issues/11)):
+  the SUN-*K-SG0*LP1 models (device type 3) keep their values at other addresses than the 3-phase models, so most of
+  their sensors showed wrong or empty values, and only the settings changed (every 5 min). On the first connection the
+  integration now reads the device type and picks the single-phase map (ha-solarman's `deye_hybrid` profile) or the
+  3-phase one. The entity ids are the same on both maps. A single-phase inverter has grid phase A sensors only, no B
+  or C, and no 3-phase-only controls (max export / import power, PV power limit, grid voltage setting, ...). The map is
+  checked against a SUN-8K-SG05LP1-AU's registers but not yet on a live logger, and writes are untested: keep
+  *Allow writes* off until the values look right. Reload the integration after updating; entities of the 3-phase map
+  that a single-phase inverter does not have stay unavailable, and you can delete them.
+- The diagnostics download names the register map in use.
+
 ## 1.5.0
 
 - **Battery and PV powers every second:** the battery SoC and power and the PV1-4 powers moved from the 15 s poll into
