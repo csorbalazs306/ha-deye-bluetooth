@@ -32,7 +32,8 @@ This is an independent project, not made by or affiliated with Deye.
 |---|---|
 | SUN-15K-SG05LP3-EU-SM2 with logger `DYDA_WiBLE_1.6.2` | **Verified**: reads and writes, except the settings [listed below](#writing-to-the-inverter) |
 | Other Deye 3-phase LV hybrids | Untested, likely to read correctly |
-| Other Deye models (single-phase, HV) | Untested: registers may differ, a warning is logged |
+| Deye single-phase hybrids (SUN-*K-SG0*LP1) | Own register map since 1.6.0, chosen automatically. Values checked against one SUN-8K-SG05LP1-AU; writes untested, a warning is logged |
+| Other Deye models (HV, string, micro) | Untested: they get the 3-phase map, registers may differ, a warning is logged |
 
 Reports from other models are welcome, see [CONTRIBUTING](CONTRIBUTING.md).
 
@@ -163,8 +164,9 @@ With more than one logger, both also need `config_entry_id`.
   confirms the inverter stored the value, not that the value is safe.
 - `write_register` is for admin users only. **The controls are not:** with *Allow writes* on, any Home Assistant user,
   automation or dashboard that can change entities can change these settings too.
-- Registers and scales come from a published map of the 3-phase LV hybrids. On other models the same address can mean
-  something else.
+- Registers and scales come from published maps: the 3-phase LV hybrids and, for the single-phase hybrids (device type
+  3), ha-solarman's `deye_hybrid` profile. The integration picks the map from the device type in register 0. On other
+  models the same address can mean something else.
 
 **Not tried on real hardware:** the settings added in 1.2.0, which are grid protection and grid standard, battery chemistry
 and voltages, generator, smart load, AC coupling, peak shaving and the raw words. Note the value before changing it, and

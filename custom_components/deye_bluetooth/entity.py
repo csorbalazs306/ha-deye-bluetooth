@@ -43,8 +43,8 @@ class SummarySensor:
     source: str | None = None  # the register key the value is read from; None when it has several
 
 
-def _key(key: str, scale: float = 1.0) -> Callable[[dict[int, int]], Any]:
-    v = r.BY_KEY[key]
+def _key(m: r.RegisterMap, key: str, scale: float = 1.0) -> Callable[[dict[int, int]], Any]:
+    v = m.by_key[key]
 
     def read(regs: dict[int, int]):
         value = r.decode_value(v, regs)
@@ -53,48 +53,56 @@ def _key(key: str, scale: float = 1.0) -> Callable[[dict[int, int]], Any]:
     return read
 
 
-def _summary(
-    object_id: str, name: str, key: str, *, unit: str | None = None, classes: tuple | None = None,
-    scale: float = 1.0, live: bool = False,
-) -> SummarySensor:
-    """A row for one register: its unit and classes are the register's, unless given (kW, a battery, no class)."""
-    unit = r.BY_KEY[key].unit if unit is None else unit
-    classes = UNIT_CLASSES.get(unit, _DEFAULT_CLASSES) if classes is None else classes
-    return SummarySensor(object_id, name, _key(key, scale), unit, classes, live, key)
+def summary_sensors(m: r.RegisterMap) -> list[SummarySensor]:
+    """The summary sensors of this register map: the same ids on every map, one set of phase sensors per phase."""
+
+    def _summary(
+        object_id: str, name: str, key: str, *, unit: str | None = None, classes: tuple | None = None,
+        scale: float = 1.0, live: bool = False,
+    ) -> SummarySensor:
+        """A row for one register: its unit and classes are the register's, unless given (kW, a battery, no class)."""
+        unit = m.by_key[key].unit if unit is None else unit
+        classes = UNIT_CLASSES.get(unit, _DEFAULT_CLASSES) if classes is None else classes
+        return SummarySensor(object_id, name, _key(m, key, scale), unit, classes, live, key)
+
+    return [
+        *[
+            sensor
+            for ph, n in (("a", 1), ("b", 2), ("c", 3))[:m.phases]
+            for sensor in (
+                # current signed like the power (export < 0), power in kW
+                _summary(f"deye_grid_phase_{ph}_current", f"Grid phase {ph.upper()} current", f"grid_current_l{n}",
+                         live=True),
+                _summary(f"deye_grid_phase_{ph}_voltage", f"Grid phase {ph.upper()} voltage", f"grid_voltage_l{n}"),
+                _summary(f"deye_grid_phase_{ph}_power", f"Grid phase {ph.upper()} power", f"grid_power_l{n}",
+                         unit="kW", scale=0.001, live=True),
+            )
+        ],
+        _summary("deye_grid_power", "Grid power", "grid_power", live=True),
+        _summary("deye_load_power", "Load power", "load_power", unit="kW", scale=0.001, live=True),
+        # the sum of the four live PV powers
+        SummarySensor("deye_pv_power", "PV power", lambda regs: r.pv_power(regs, m), "W", POWER, live=True),
+        _summary("deye_pv1_power", "PV1 power", "pv1_power"),
+        _summary("deye_pv2_power", "PV2 power", "pv2_power"),
+        _summary("deye_battery_soc", "Battery SoC", "battery_soc",
+                 classes=(SensorDeviceClass.BATTERY, SensorStateClass.MEASUREMENT)),
+        _summary("deye_battery_power", "Battery power", "battery_power"),
+        _summary("deye_battery_capacity", "Battery capacity", "battery_capacity", classes=(None, None)),
+        _summary("deye_grid_import_energy", "Grid import energy", "total_import"),
+        _summary("deye_grid_export_energy", "Grid export energy", "total_export"),
+        _summary("deye_load_energy", "Load energy", "total_load"),
+        _summary("deye_pv_energy", "PV energy", "total_pv"),
+        _summary("deye_program_soc", "Program SoC", "program_1_soc"),
+        _summary("deye_solar_sell", "Solar sell", "solar_sell"),
+    ]
 
 
-SUMMARY_SENSORS: list[SummarySensor] = [
-    *[
-        sensor
-        for ph, n in (("a", 1), ("b", 2), ("c", 3))
-        for sensor in (
-            # current signed like the power (export < 0), power in kW
-            _summary(f"deye_grid_phase_{ph}_current", f"Grid phase {ph.upper()} current", f"grid_current_l{n}", live=True),
-            _summary(f"deye_grid_phase_{ph}_voltage", f"Grid phase {ph.upper()} voltage", f"grid_voltage_l{n}"),
-            _summary(f"deye_grid_phase_{ph}_power", f"Grid phase {ph.upper()} power", f"grid_power_l{n}", unit="kW",
-                     scale=0.001, live=True),
-        )
-    ],
-    _summary("deye_grid_power", "Grid power", "grid_power", live=True),
-    _summary("deye_load_power", "Load power", "load_power", unit="kW", scale=0.001, live=True),
-    SummarySensor("deye_pv_power", "PV power", r.pv_power, "W", POWER, live=True),  # the sum of the four live PV powers
-    _summary("deye_pv1_power", "PV1 power", "pv1_power"),
-    _summary("deye_pv2_power", "PV2 power", "pv2_power"),
-    _summary("deye_battery_soc", "Battery SoC", "battery_soc", classes=(SensorDeviceClass.BATTERY, SensorStateClass.MEASUREMENT)),
-    _summary("deye_battery_power", "Battery power", "battery_power"),
-    _summary("deye_battery_capacity", "Battery capacity", "battery_capacity", classes=(None, None)),
-    _summary("deye_grid_import_energy", "Grid import energy", "total_import"),
-    _summary("deye_grid_export_energy", "Grid export energy", "total_export"),
-    _summary("deye_load_energy", "Load energy", "total_load"),
-    _summary("deye_pv_energy", "PV energy", "total_pv"),
-    _summary("deye_program_soc", "Program SoC", "program_1_soc"),
-    _summary("deye_solar_sell", "Solar sell", "solar_sell"),
-]
-# the detail sensors that repeat a control or a summary sensor: disabled by default, the controls and summaries are the
-# ones people use.  Enabling one shows the same register again.
-DUPLICATES = frozenset({
-    *r.NUMBERS, *r.SELECTS, *r.TIMES, *r.ON_OFF_SWITCHES, *(s.source for s in SUMMARY_SENSORS if s.source),
-})
+def duplicates(m: r.RegisterMap) -> frozenset[str]:
+    """The detail sensors that repeat a control or a summary sensor: disabled by default, the controls and summaries
+    are the ones people use.  Enabling one shows the same register again."""
+    return frozenset({
+        *m.numbers, *m.selects, *m.times, *m.on_off_switches, *(s.source for s in summary_sensors(m) if s.source),
+    })
 
 
 class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
@@ -119,7 +127,7 @@ class DeyeEntity(CoordinatorEntity[DeyeCoordinator]):
             identifiers={(DOMAIN, entry.unique_id)},
             name=f"Deye inverter{coordinator.prefix.removeprefix('deye').replace('_', ' ')}",
             manufacturer="Deye",
-            model=r.device_model(coordinator.data),
+            model=r.device_model(coordinator.data, coordinator.map),
             serial_number=r.decode_serial(coordinator.data),
         )
 
@@ -167,7 +175,7 @@ class ValueEntity(DetailEntity):
         super().__init__(coordinator, value.key, platform, unique_key)
         self._value = value
         self._attr_name = value.name
-        self.settings = value.reg in r.SLOW_REGS
+        self.settings = value.reg in coordinator.map.slow_regs
 
     @property
     def native_value(self):
@@ -188,7 +196,7 @@ class ControlEntity(ValueEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: DeyeCoordinator, key: str, domain: str) -> None:
-        super().__init__(coordinator, r.BY_KEY[key], domain, unique_key=f"{key}_control")
+        super().__init__(coordinator, coordinator.map.by_key[key], domain, unique_key=f"{key}_control")
 
     @property
     def available(self) -> bool:

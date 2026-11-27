@@ -1,9 +1,12 @@
-"""The Deye 3-phase LV hybrid register map: what is polled and how it decodes.
+"""The Deye register maps: what is polled and how it decodes.
 
-Verified on a SUN-15K-SG05LP3-EU-SM2; other models are untested.
+Two maps, chosen by the device type in register 0 (map_for):
+- the 3-phase LV hybrid map (MODBUS RTU V105, the ha-solarman ``deye_p3`` profile), verified on a
+  SUN-15K-SG05LP3-EU-SM2.  The module-level names (LIVE, VALUES, NUMBERS, ...) are this map;
+- the single-phase hybrid map (SUN-*K-SG0*LP1, the ha-solarman ``deye_hybrid`` profile, MODBUS RTU V118),
+  SINGLE_PHASE at the end of the module.  Not verified on a logger yet.
 
-Holding registers of the Deye 3-phase LV hybrid map (MODBUS RTU V105, the
-ha-solarman ``deye_p3`` profile), decimal.  32-bit values are low word first.
+Holding registers, decimal.  32-bit values are low word first.
 
 Three poll groups: LIVE every second (grid powers and currents, load, battery
 SoC and power, PV powers), FAST every scan (15 s: grid voltages, the rest of the
@@ -16,7 +19,7 @@ Kept free of Home Assistant imports so the tests run without it.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # every live interval (1 s): the fast-moving powers of a power flow — grid, load,
 # battery and PV
@@ -102,11 +105,12 @@ class Value:
     offset: int = 0  # temperatures: (raw - 1000) / 10
     options: dict[int, str] | None = None  # text instead of the number
     mask: int = 0  # only these bits, shifted down
-    fmt: str | None = None  # "time" (HHMM), "hex" or "clock" (registers 62-64)
+    fmt: str | None = None  # "time" (HHMM), "hex" or "clock" (three registers from reg)
+    high: int | None = None  # words=2: the high word's register, when it is not reg + 1
 
 
-def _phases(key, name, first, unit, scale=1.0, signed=False):
-    return [Value(f"{key}_l{i}", f"{name} L{i}", first + i - 1, unit, scale, signed) for i in (1, 2, 3)]
+def _phases(key, name, first, unit, scale=1.0, signed=False, phases=3):
+    return [Value(f"{key}_l{i}", f"{name} L{i}", first + i - 1, unit, scale, signed) for i in range(1, phases + 1)]
 
 
 def _programs(key, name, first, unit=None, scale=1.0, fmt=None):
@@ -404,9 +408,9 @@ def _words(regs: dict[int, int], addresses: Iterable[int]) -> list[int] | None:
     return None if None in words else words
 
 
-def _decode_clock(regs: dict[int, int]) -> str | None:
-    """Registers 62-64: year, month / day, hour / minute, second, one byte each."""
-    words = _words(regs, (62, 63, 64))
+def _decode_clock(regs: dict[int, int], first: int) -> str | None:
+    """Three registers: year, month / day, hour / minute, second, one byte each."""
+    words = _words(regs, (first, first + 1, first + 2))
     if words is None:
         return None
     a, b, c = words
@@ -427,7 +431,7 @@ def encode_hhmm(hour: int, minute: int) -> int:
 def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     """The value from the register words, None while a word is missing."""
     if v.fmt == "clock":
-        return _decode_clock(regs)
+        return _decode_clock(regs, v.reg)
     low = regs.get(v.reg)
     if low is None:
         return None
@@ -441,7 +445,7 @@ def decode_value(v: Value, regs: dict[int, int]) -> float | int | str | None:
     if v.mask:
         return (low & v.mask) // (v.mask & -v.mask)
     if v.words == 2:
-        high = regs.get(v.reg + 1)
+        high = regs.get(v.reg + 1 if v.high is None else v.high)
         if high is None:
             return None
         raw = (high << 16) | low
@@ -472,24 +476,271 @@ def decode_serial(regs: dict[int, int]) -> str | None:
 FIRMWARE = {"main": (14, 15, 11), "hmi": (17, 18), "protocol": (2,)}
 
 
-def decode_firmware(regs: dict[int, int], part: str) -> str | None:
-    words = _words(regs, FIRMWARE[part])
+def decode_firmware(regs: dict[int, int], part: str, m: RegisterMap | None = None) -> str | None:
+    words = _words(regs, (m or THREE_PHASE).firmware[part])
     return None if words is None else "-".join(f"{w:04X}" for w in words)
 
 
-def rated_power(regs: dict[int, int]) -> float | None:
-    return decode_value(BY_KEY["rated_power"], regs)
+def rated_power(regs: dict[int, int], m: RegisterMap | None = None) -> float | None:
+    return decode_value((m or THREE_PHASE).by_key["rated_power"], regs)
 
 
-def device_model(regs: dict[int, int]) -> str | None:
+def device_model(regs: dict[int, int], m: RegisterMap | None = None) -> str | None:
     """As far as the inverter says: its type and rated power."""
     kind = decode_value(BY_KEY["device_type"], regs)
-    rated = rated_power(regs)
+    rated = rated_power(regs, m)
     if kind is None:
         return None
     return f"{kind}, {rated / 1000:g} kW" if rated else kind
 
 
-def pv_power(regs: dict[int, int]) -> int | None:
-    parts = [decode_value(BY_KEY[f"pv{i}_power"], regs) for i in (1, 2, 3, 4)]
+def pv_power(regs: dict[int, int], m: RegisterMap | None = None) -> int | None:
+    by_key = (m or THREE_PHASE).by_key
+    parts = [decode_value(by_key[f"pv{i}_power"], regs) for i in (1, 2, 3, 4)]
     return None if any(p is None for p in parts) else sum(parts)
+
+
+@dataclass(frozen=True, eq=False)
+class RegisterMap:
+    """One inverter family's registers: the poll blocks, the values and the controls of the device page."""
+
+    name: str
+    live: list[tuple[int, int]]
+    fast: list[tuple[int, int]]
+    slow: list[tuple[int, int]]
+    values: list[Value]
+    numbers: dict[str, tuple[float, float | _RatedPower, float]]
+    selects: dict[str, dict[int, str]]
+    firmware: dict[str, tuple[int, ...]]
+    state: Value
+    alarm_regs: range
+    relay_reg: int
+    relay_mask: int  # the bits of relay_reg that say the grid relay is closed
+    phases: int  # the grid phases the summary sensors show
+    verified: bool  # checked on a real logger
+    times: list[str] = field(default_factory=lambda: list(TIMES))
+    on_off_switches: list[str] = field(default_factory=lambda: list(ON_OFF_SWITCHES))
+    by_key: dict[str, Value] = field(init=False)
+    live_regs: frozenset[int] = field(init=False)
+    slow_regs: frozenset[int] = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "by_key", {v.key: v for v in self.values})
+        object.__setattr__(self, "live_regs", frozenset(reg for s, c in self.live for reg in range(s, s + c)))
+        object.__setattr__(self, "slow_regs", frozenset(reg for s, c in self.slow for reg in range(s, s + c)))
+
+    @property
+    def program_charge(self) -> int:
+        return self.by_key["program_1_charge"].reg  # six consecutive registers
+
+    @property
+    def grid_charge_reg(self) -> int:
+        return self.by_key["grid_charge"].reg
+
+    @property
+    def grid_voltages(self) -> list[Value]:
+        """The grid phase voltages: the grid sensor is on while one of them is up."""
+        return [v for v in self.values if v.key.startswith("grid_voltage_l")]
+
+
+THREE_PHASE = RegisterMap(
+    name="3-phase LV hybrid (deye_p3)", live=LIVE, fast=FAST, slow=SLOW, values=VALUES, numbers=NUMBERS,
+    selects=SELECTS, firmware=FIRMWARE, state=STATE, alarm_regs=ALARM_REGS, relay_reg=REG_RELAY,
+    relay_mask=GRID_RELAY_BIT, phases=3, verified=True,
+)
+
+# The single-phase hybrid map (SUN-*K-SG0*LP1): the addresses, scales and texts of ha-solarman's deye_hybrid
+# (Deye MODBUS RTU V118).  L2 is the second leg of the split-phase (US) models; 0 elsewhere.  The keys are the
+# 3-phase map's where the meaning is the same, so the summary sensors and the controls keep their ids.
+_1P_LIVE: list[tuple[int, int]] = [
+    (160, 16),  # grid, external CT and inverter currents, generator power, grid / CT / inverter powers
+    (176, 15),  # load powers and currents, generator voltage, battery temperature, voltage, SoC, PV1-4 power,
+                # battery power
+]
+_1P_FAST: list[tuple[int, int]] = [
+    (70, 16),   # daily / total battery, grid and load energy, grid frequency
+    (86, 12),   # total load energy, DC / AC temperature, total PV
+    (101, 16),  # alarm and fault words, daily PV, PV1-4 voltage and current
+    (150, 10),  # grid, inverter and load voltages
+    (191, 4),   # battery current, load and inverter frequency, grid relay
+]
+_1P_SLOW: list[tuple[int, int]] = [
+    (0, 8),     # device type, Modbus address, protocol version, inverter serial (ASCII)
+    (10, 15),   # firmware versions, rated power, MPPTs and phases, self-check time, inverter clock
+    (59, 1),    # device state
+    (200, 16),  # battery settings
+    (216, 16),  # battery SoC / voltage limits, generator and grid charging
+    (232, 16),  # grid charge enable, smart load, work mode, solar sell
+    (248, 16),  # Time of Use, the six programs' times, powers, voltages
+    (264, 16),  # the six programs' voltages, SoC and charge flags
+    (280, 14),  # special functions, grid protection limits, peak shaving
+    (312, 15),  # BMS limits and readings, alarm and fault words, BMS type, AC coupling
+]
+_1P_VALUES: list[Value] = [
+    # identity / state
+    Value("rated_power", "Rated power", 16, "W", 0.1, words=2),
+    Value("device_state", "Device state", 59),
+    Value("relay_status", "Relay status", 194),
+    Value("device_type", "Device type", 0, options=DEVICES),
+    Value("modbus_address", "Modbus address", 1),
+    Value("mppts", "MPPTs", 18, mask=0x0F00),
+    Value("phases", "Phases", 18, mask=0x000F),
+    Value("self_check_time", "Self-check time", 21, "s"),
+    Value("inverter_clock", "Inverter clock", 22, fmt="clock"),
+    # PV
+    Value("pv1_power", "PV1 power", 186, "W"),
+    Value("pv2_power", "PV2 power", 187, "W"),
+    Value("pv3_power", "PV3 power", 188, "W"),
+    Value("pv4_power", "PV4 power", 189, "W"),
+    Value("pv1_voltage", "PV1 voltage", 109, "V", 0.1),
+    Value("pv1_current", "PV1 current", 110, "A", 0.1),
+    Value("pv2_voltage", "PV2 voltage", 111, "V", 0.1),
+    Value("pv2_current", "PV2 current", 112, "A", 0.1),
+    Value("pv3_voltage", "PV3 voltage", 113, "V", 0.1),
+    Value("pv3_current", "PV3 current", 114, "A", 0.1),
+    Value("pv4_voltage", "PV4 voltage", 115, "V", 0.1),
+    Value("pv4_current", "PV4 current", 116, "A", 0.1),
+    # grid port (internal CTs): import > 0, export < 0
+    *_phases("grid_voltage", "Grid voltage", 150, "V", 0.1, phases=2),
+    Value("grid_voltage", "Grid voltage", 152, "V", 0.1),
+    *_phases("grid_current", "Grid current", 160, "A", 0.01, True, phases=2),
+    *_phases("grid_power", "Grid power", 167, "W", signed=True, phases=2),
+    Value("grid_power", "Grid power", 169, "W", signed=True),
+    Value("grid_frequency", "Grid frequency", 79, "Hz", 0.01),
+    *_phases("external_ct_current", "External CT current", 162, "A", 0.01, True, phases=2),
+    *_phases("external_ct_power", "External CT power", 170, "W", signed=True, phases=2),
+    Value("external_ct_power", "External CT power", 172, "W", signed=True),
+    # inverter output
+    *_phases("inverter_voltage", "Inverter voltage", 154, "V", 0.1, phases=2),
+    Value("inverter_voltage", "Inverter voltage", 156, "V", 0.1),
+    *_phases("inverter_current", "Inverter current", 164, "A", 0.01, True, phases=2),
+    *_phases("inverter_power", "Inverter power", 173, "W", signed=True, phases=2),
+    Value("inverter_power", "Inverter power", 175, "W", signed=True),
+    Value("inverter_frequency", "Inverter frequency", 193, "Hz", 0.01),
+    # load port (the whole house)
+    *_phases("load_voltage", "Load voltage", 157, "V", 0.1, phases=2),
+    *_phases("load_power", "Load power", 176, "W", signed=True, phases=2),
+    Value("load_power", "Load power", 178, "W", signed=True),
+    *_phases("load_current", "Load current", 179, "A", 0.01, True, phases=2),
+    Value("load_frequency", "Load frequency", 192, "Hz", 0.01),
+    # generator port
+    Value("generator_power", "Generator power", 166, "W"),
+    Value("generator_voltage", "Generator voltage", 181, "V", 0.1),
+    # battery: discharge > 0, charge < 0
+    Value("battery_temperature", "Battery temperature", 182, "°C", 0.1, offset=1000),
+    Value("battery_voltage", "Battery voltage", 183, "V", 0.01),
+    Value("battery_soc", "Battery SoC", 184, "%"),
+    Value("battery_power", "Battery power", 190, "W", signed=True),
+    Value("battery_current", "Battery current", 191, "A", 0.01, True),
+    Value("dc_temperature", "DC temperature", 90, "°C", 0.1, offset=1000),
+    Value("ac_temperature", "AC temperature", 91, "°C", 0.1, offset=1000),
+    # energy (kWh)
+    Value("daily_charge", "Battery charge today", 70, "kWh", 0.1),
+    Value("daily_discharge", "Battery discharge today", 71, "kWh", 0.1),
+    Value("total_charge", "Battery charge total", 72, "kWh", 0.1, words=2),
+    Value("total_discharge", "Battery discharge total", 74, "kWh", 0.1, words=2),
+    Value("daily_import", "Grid import today", 76, "kWh", 0.1),
+    Value("daily_export", "Grid export today", 77, "kWh", 0.1),
+    Value("total_import", "Grid import total", 78, "kWh", 0.1, words=2, high=80),  # 79 is the grid frequency
+    Value("total_export", "Grid export total", 81, "kWh", 0.1, words=2),
+    Value("daily_load", "Consumption today (inverter)", 84, "kWh", 0.1),
+    Value("total_load", "Consumption total", 85, "kWh", 0.1, words=2),
+    Value("daily_pv", "PV today", 108, "kWh", 0.1),
+    Value("total_pv", "PV total", 96, "kWh", 0.1, words=2),
+    Value("device_alarm", "Alarm word", 101, words=2),
+    Value("fault_1", "Fault word 1", 103, words=2),
+    Value("fault_2", "Fault word 2", 105, words=2),
+    # battery settings
+    Value("battery_control_mode", "Battery control mode", 200, options=BATTERY_CONTROL),
+    Value("battery_equalization_voltage", "Battery equalization voltage", 201, "V", 0.01),
+    Value("battery_absorption_voltage", "Battery absorption voltage", 202, "V", 0.01),
+    Value("battery_float_voltage", "Battery float voltage", 203, "V", 0.01),
+    Value("battery_capacity", "Battery capacity", 204, "Ah"),
+    Value("battery_empty_voltage", "Battery empty voltage", 205, "V", 0.01),
+    Value("zero_export_power", "Zero export power", 206, "W", signed=True),
+    Value("battery_equalization_cycle", "Battery equalization cycle", 207, "d"),
+    Value("battery_equalization_time", "Battery equalization time", 208, "h", 0.5),
+    Value("battery_temperature_compensation", "Battery temperature compensation", 209, "mV/°C", signed=True),
+    Value("battery_max_charge_current", "Battery max charge current", 210, "A"),
+    Value("battery_max_discharge_current", "Battery max discharge current", 211, "A"),
+    Value("battery_operation_mode", "Battery operation mode", 213, options=BATTERY_OPERATION),
+    Value("battery_resistance", "Battery resistance", 215, "mΩ"),
+    Value("battery_charge_efficiency", "Battery charge efficiency", 216, "%", 0.1),
+    Value("battery_shutdown_soc", "Battery shutdown SoC", 217, "%"),
+    Value("battery_restart_soc", "Battery restart SoC", 218, "%"),
+    Value("battery_low_soc", "Battery low SoC", 219, "%"),
+    Value("battery_shutdown_voltage", "Battery shutdown voltage", 220, "V", 0.01),
+    Value("battery_restart_voltage", "Battery restart voltage", 221, "V", 0.01),
+    Value("battery_low_voltage", "Battery low voltage", 222, "V", 0.01),
+    Value("generator_operating_time", "Generator operating time", 223, "h", 0.1),
+    Value("generator_cooling_time", "Generator cooling time", 224, "h", 0.1),
+    Value("generator_charge_start_voltage", "Generator charge start voltage", 225, "V", 0.01),
+    Value("generator_charge_start_soc", "Generator charge start SoC", 226, "%"),
+    Value("generator_charge_current", "Generator charge current", 227, "A"),
+    Value("grid_charge_start_voltage", "Grid charge start voltage", 228, "V", 0.01),
+    Value("grid_charge_start_soc", "Grid charge start SoC", 229, "%"),
+    Value("grid_charge_current", "Grid charge current", 230, "A"),
+    Value("generator_charge", "Generator charge enabled", 231),
+    Value("grid_charge", "Grid charge enabled", 232),
+    Value("io_mode", "IO mode", 235, options=IO_MODES),
+    Value("smart_load_off_voltage", "Smart load off voltage", 236, "V", 0.01),
+    Value("smart_load_off_soc", "Smart load off SoC", 237, "%"),
+    Value("smart_load_on_voltage", "Smart load on voltage", 238, "V", 0.01),
+    Value("smart_load_on_soc", "Smart load on SoC", 239, "%"),
+    # grid and work mode settings
+    Value("generator_min_pv_power", "Generator min PV power", 241, "W"),
+    Value("charging_signal", "Charging signal", 242, options=CHARGING_SIGNALS),
+    Value("energy_pattern", "Energy pattern", 243, options=ENERGY_PATTERNS),
+    Value("work_mode", "Work mode", 244),
+    Value("work_mode_name", "Work mode name", 244, options=WORK_MODES),  # the same register, as text
+    Value("max_sell_power", "Max sell power", 245, "W"),
+    Value("solar_sell", "Solar sell", 247),
+    Value("time_of_use", "Time of use", 248),
+    *_programs("time", "time", 250, fmt="time"),
+    *_programs("power", "power", 256, "W"),
+    *_programs("voltage", "voltage", 262, "V", 0.01),
+    *_programs("soc", "SoC", 268, "%"),
+    *_programs("charge", "charge", 274),
+    Value("special_functions", "Special functions word", 280),
+    Value("off_grid", "Off grid", 281),
+    Value("grid_reconnection_time", "Grid reconnection time", 282, "s"),
+    Value("grid_frequency_setting", "Grid frequency setting", 285, options=GRID_FREQUENCIES),
+    Value("grid_protection_voltage_high", "Grid protection voltage high", 287, "V", 0.1),
+    Value("grid_protection_voltage_low", "Grid protection voltage low", 288, "V", 0.1),
+    Value("grid_protection_frequency_high", "Grid protection frequency high", 289, "Hz", 0.01),
+    Value("grid_protection_frequency_low", "Grid protection frequency low", 290, "Hz", 0.01),
+    Value("generator_grid_side", "Generator grid side", 291),
+    Value("generator_peak_shaving_power", "Generator peak shaving power", 292, "W"),
+    Value("grid_peak_shaving_power", "Grid peak shaving power", 293, "W"),
+    # BMS
+    Value("bms_charge_voltage", "BMS charge voltage", 312, "V", 0.01),
+    Value("bms_discharge_voltage", "BMS discharge voltage", 313, "V", 0.01),
+    Value("bms_charge_current_limit", "BMS charge current limit", 314, "A"),
+    Value("bms_discharge_current_limit", "BMS discharge current limit", 315, "A"),
+    Value("bms_soc", "BMS SoC", 316, "%"),
+    Value("bms_voltage", "BMS voltage", 317, "V", 0.01),
+    Value("bms_current", "BMS current", 318, "A", signed=True),
+    Value("bms_max_charge_current", "BMS max charge current", 320, "A"),
+    Value("bms_max_discharge_current", "BMS max discharge current", 321, "A"),
+    Value("bms_alarm", "BMS alarm word", 322),
+    Value("bms_fault", "BMS fault word", 323),
+    Value("bms_other", "BMS other word", 324),
+    Value("bms_type", "BMS type", 325, options=BMS_TYPES),
+    Value("ac_coupling", "AC coupling word", 326),
+]
+_1P_KEYS = {v.key for v in _1P_VALUES}
+SINGLE_PHASE = RegisterMap(
+    name="single-phase hybrid (deye_hybrid)", live=_1P_LIVE, fast=_1P_FAST, slow=_1P_SLOW, values=_1P_VALUES,
+    numbers={key: limits for key, limits in NUMBERS.items() if key in _1P_KEYS},
+    selects={key: options for key, options in SELECTS.items() if key in _1P_KEYS},
+    firmware={"main": (13, 12, 11), "hmi": (14, 10), "protocol": (2,)},  # control board, communication board
+    state=Value("state", "State", 59, options=STATES), alarm_regs=range(101, 107),
+    relay_reg=194, relay_mask=0xFFFF,  # 194 is the grid relay as a whole: non-zero = closed
+    phases=1, verified=False,
+)
+SINGLE_PHASE_TYPES = {3, 0x300}
+
+
+def map_for(device_type: int | None) -> RegisterMap:
+    """The map of this device type (register 0).  Anything not single-phase gets the 3-phase map, as before."""
+    return SINGLE_PHASE if device_type in SINGLE_PHASE_TYPES else THREE_PHASE
